@@ -865,7 +865,7 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
 
   // Check known multi-word & single-word domains first (e.g. 'google finance', 'mdn web docs', 'hacker news')
   let matchedKnownSite = null;
-  for (const name of Object.keys(KNOWN_SITE_DOMAINS)) {
+  for (const name of Object.keys(KNOWN_SITE_DOMAINS).sort((a, b) => b.length - a.length)) {
     const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
     const r = new RegExp('^(?:open|go\\s+to|navigate\\s+to|visit|launch)\\s+(?:(?:the|my)\\s+)?(' + esc + ')(?:\\s+(?:website|app|page|site|webpage))?(?:\\s*[,;]\\s*|\\s+(?:and\\s+then|then|after\\s+that|and\\s+also|and|with|\\&)\\s*|\\s+)(.*)$', 'i');
     const m = q.match(r);
