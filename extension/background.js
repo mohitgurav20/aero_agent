@@ -880,10 +880,9 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
     remainingQuery = matchedKnownSite.remaining;
 
     // Direct Search / Problem / Topic Intent on Known Site
-    const searchIntent = remainingQuery.match(/^(?:search(?:\s+for)?|find|look(?:\s+for)?)\s+([^,]+?)(?:(?:\s+(?:and\s+then|then|after\s+that|and\s+also|and)\s+(?:click|open|select|tap|play|inspect|summarize|solve)\s+.*|\s*[,;]\s*.*)?)$/i);
-    if (searchIntent) {
-      let cleanTerm = searchIntent[1]
-        .replace(/\s+(?:and\s+then|then|after\s+that|and\s+also|and)\s+(?:click|open|select|tap|play|inspect|summarize|solve)\s+.*$/i, '')
+    const searchMatch = remainingQuery.match(/^(?:search(?:\s+for)?|find|look(?:\s+for)?)\s+(.+?)(?:\s+(?:and\s+then|then|after\s+that|and\s+also|and)\s+(?:click|open|select|tap|play|inspect|summarize|solve|slove|run)|$)/i);
+    if (searchMatch) {
+      let cleanTerm = searchMatch[1]
         .replace(/\s+(?:problem|tutorial|documentation|docs|guide|solution|article|course|video)$/i, '')
         .trim();
 
@@ -914,7 +913,7 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
           _inspectAfter: true
         });
 
-        const hasClickIntent = /\b(?:click|open|select|tap|first|top|solve)\b/i.test(remainingQuery);
+        const hasClickIntent = /\b(?:click|open|select|tap|first|top|solve|slove)\b/i.test(remainingQuery);
         if (hasClickIntent) {
           steps.push({
             type: 'click',
@@ -922,6 +921,52 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
             label: `Click top ${cleanTerm} result`
           });
         }
+
+        const hasSolveIntent = /\b(?:solve|slove|solution|code|write)\b/i.test(remainingQuery);
+        if (hasSolveIntent) {
+          let lang = 'python';
+          if (/\b(?:c\+\+|cpp)\b/i.test(remainingQuery + ' ' + q)) lang = 'cpp';
+          else if (/\b(?:java)\b/i.test(remainingQuery + ' ' + q)) lang = 'java';
+          else if (/\b(?:javascript|js)\b/i.test(remainingQuery + ' ' + q)) lang = 'javascript';
+          else if (matchedKnownSite.site === 'leetcode') {
+            lang = /\b(?:cpp|c\+\+)\b/i.test(q) ? 'cpp' : 'python';
+          }
+
+          let code = '';
+          try {
+            const resp = await fetch('http://127.0.0.1:5000/api/generate_code', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ topic: cleanTerm, language: lang }),
+              signal: AbortSignal.timeout(8000)
+            });
+            if (resp.ok) {
+              const json = await resp.json();
+              if (json?.code) code = json.code;
+            }
+          } catch (e) {}
+
+          if (!code) {
+            code = `# Solution for ${cleanTerm}\ndef solution():\n    pass\n`;
+          }
+
+          steps.push({
+            type: 'type',
+            field: 'code editor textarea',
+            value: code,
+            label: `Write solution for ${cleanTerm}`
+          });
+
+          const hasRunIntent = /\b(?:run|compile|execute|submit)\b/i.test(remainingQuery);
+          if (hasRunIntent) {
+            steps.push({
+              type: 'click',
+              target: 'Run Compile Execute',
+              label: 'Run code'
+            });
+          }
+        }
+
         return { steps, context: { ...context, hasNavigated: true, topic: `${cleanTerm} on ${matchedKnownSite.site}` } };
       }
     }

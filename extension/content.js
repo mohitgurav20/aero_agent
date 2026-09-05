@@ -615,6 +615,36 @@
         await sleep(300);
         return;
       }
+
+      // Check for Monaco Editor (used on LeetCode, VS Code web, etc.)
+      const monacoContainer = element.closest('.monaco-editor') || document.querySelector('.monaco-editor');
+      if (monacoContainer) {
+        try {
+          const s = document.createElement('script');
+          s.textContent = `
+            try {
+              if (window.monaco && window.monaco.editor) {
+                const editors = window.monaco.editor.getEditors();
+                if (editors && editors.length > 0) {
+                  editors[0].setValue(${JSON.stringify(text)});
+                }
+              }
+            } catch(e) {}
+          `;
+          (document.head || document.documentElement).appendChild(s);
+          s.remove();
+        } catch(e) {}
+
+        try {
+          const ta = monacoContainer.querySelector('textarea') || element;
+          ta.focus();
+          document.execCommand('selectAll', false, null);
+          document.execCommand('insertText', false, text);
+        } catch(e) {}
+
+        await sleep(300);
+        return;
+      }
     } else if (element.isContentEditable || element.getAttribute('contenteditable') === 'true' || element.getAttribute('role') === 'textbox' || element.closest('[contenteditable="true"]')) {
       // For Gmail/Outlook compose body which uses contenteditable divs
       const targetEditable = element.isContentEditable ? element : (element.closest('[contenteditable="true"]') || element);
@@ -852,15 +882,15 @@
     }
 
     if (rawTarget.includes('code') || rawTarget.includes('editor')) {
-      const codeEditor = document.querySelector('.ace_text-input, textarea.ace_text-input, .ace_content, .monaco-editor textarea, div[role="textbox"], textarea');
+      const codeEditor = document.querySelector('.monaco-editor textarea, .monaco-editor, .ace_text-input, textarea.ace_text-input, .ace_content, div[role="textbox"], textarea');
       if (codeEditor) return codeEditor;
     }
 
     if (rawTarget.includes('run') || rawTarget.includes('compile') || rawTarget.includes('execute')) {
-      const runBtn = document.querySelector('#run-btn, button.run, [data-testid*="run"], button[aria-label*="run" i]')
+      const runBtn = document.querySelector('button[data-e2e-locator="console-run-button"], button[data-cypress="RunCode"], #run-btn, button.run, [data-testid*="run"], button[aria-label*="run" i]')
         || Array.from(document.querySelectorAll('button')).find(btn => {
              const t = (btn.textContent || btn.getAttribute('aria-label') || '').toLowerCase().trim();
-             return t === 'run' || t.startsWith('run') || t.includes('compile');
+             return t === 'run' || t.startsWith('run') || t.includes('compile') || t.includes('execute');
            });
       if (runBtn) return runBtn;
     }
