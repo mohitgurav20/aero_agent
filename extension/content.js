@@ -545,6 +545,40 @@
       try { element.click(); } catch(e) {}
     }
 
+    // Check for Monaco Editor FIRST (LeetCode, VS Code web, etc.)
+    const monacoContainer = (element && element.closest && element.closest('.monaco-editor'))
+                         || (element && element.classList && element.classList.contains('monaco-editor') ? element : null)
+                         || document.querySelector('.monaco-editor');
+    if (monacoContainer && (window.location.hostname.includes('leetcode.com') || element.closest?.('.monaco-editor') || element.querySelector?.('.monaco-editor'))) {
+      console.log('[Content] Typing into Monaco Editor on', window.location.hostname);
+      try {
+        const s = document.createElement('script');
+        s.textContent = `
+          try {
+            if (window.monaco && window.monaco.editor) {
+              const editors = window.monaco.editor.getEditors();
+              if (editors && editors.length > 0) {
+                editors[0].setValue(${JSON.stringify(text)});
+              }
+            }
+          } catch(e) {}
+        `;
+        (document.head || document.documentElement).appendChild(s);
+        s.remove();
+      } catch(e) {}
+
+      try {
+        const ta = monacoContainer.querySelector('textarea') || element;
+        ta.focus();
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, text);
+      } catch(e) {}
+
+      await sleep(400);
+      element.style.outline = prevOutline;
+      return;
+    }
+
     if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
       const prevVal = element.value || '';
       const proto = element.tagName === 'INPUT' ? window.HTMLInputElement.prototype : window.HTMLTextAreaElement.prototype;
@@ -607,36 +641,6 @@
 
         try {
           const ta = aceContainer.querySelector('textarea.ace_text-input') || element;
-          ta.focus();
-          document.execCommand('selectAll', false, null);
-          document.execCommand('insertText', false, text);
-        } catch(e) {}
-
-        await sleep(300);
-        return;
-      }
-
-      // Check for Monaco Editor (used on LeetCode, VS Code web, etc.)
-      const monacoContainer = element.closest('.monaco-editor') || document.querySelector('.monaco-editor');
-      if (monacoContainer) {
-        try {
-          const s = document.createElement('script');
-          s.textContent = `
-            try {
-              if (window.monaco && window.monaco.editor) {
-                const editors = window.monaco.editor.getEditors();
-                if (editors && editors.length > 0) {
-                  editors[0].setValue(${JSON.stringify(text)});
-                }
-              }
-            } catch(e) {}
-          `;
-          (document.head || document.documentElement).appendChild(s);
-          s.remove();
-        } catch(e) {}
-
-        try {
-          const ta = monacoContainer.querySelector('textarea') || element;
           ta.focus();
           document.execCommand('selectAll', false, null);
           document.execCommand('insertText', false, text);
