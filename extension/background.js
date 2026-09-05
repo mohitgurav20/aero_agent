@@ -812,7 +812,17 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
     let queryTerm = (siteSearchMatch ? siteSearchMatch[2] : searchOnSiteMatch[1]).trim();
     queryTerm = queryTerm.replace(/\s+(?:and\s+then|then|after\s+that|and\s+also|and)\s+(?:click|open|select|tap|play|inspect|summarize)\s+.*$/i, '').trim();
 
-    if (rawSite === 'youtube' || rawSite === 'youtube.com') {
+    if (rawSite === 'reddit' || rawSite === 'reddit.com') {
+      const searchUrl = `https://www.reddit.com/search/?q=${encodeURIComponent(queryTerm)}`;
+      steps.push({ type: 'navigate', url: 'https://www.reddit.com', label: 'Open Reddit' });
+      steps.push({ type: 'navigate', url: searchUrl, label: `Search Reddit for "${queryTerm}"`, _inspectAfter: true });
+      return { steps, context: { ...context, hasNavigated: true, topic: `${queryTerm} on Reddit`, queryTerm } };
+    } else if (rawSite === 'amazon' || rawSite === 'amazon.com') {
+      const searchUrl = `https://www.amazon.com/s?k=${encodeURIComponent(queryTerm)}`;
+      steps.push({ type: 'navigate', url: 'https://www.amazon.com', label: 'Open Amazon' });
+      steps.push({ type: 'navigate', url: searchUrl, label: `Search Amazon for "${queryTerm}"`, _inspectAfter: true });
+      return { steps, context: { ...context, hasNavigated: true, topic: `${queryTerm} on Amazon`, queryTerm } };
+    } else if (rawSite === 'youtube' || rawSite === 'youtube.com') {
       const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(queryTerm)}`;
       steps.push({ type: 'navigate', url: searchUrl, label: `Search YouTube for "${queryTerm}"` });
       steps.push({ type: 'click', target: 'first search result', label: 'Click top search result' });
@@ -1103,8 +1113,24 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
         }
       }
       if (combinedSteps.length > 0) {
-        console.log('[SQ] Multi-stage compound plan resolved:', combinedSteps.map(s => s.label));
-        return combinedSteps.map((s, idx) => ({ ...s, id: idx, status: 'pending' }));
+        // De-duplicate consecutive navigation steps to the same domain (e.g. 'Open gmail' followed by 'Open Gmail & Launch Compose')
+        const filteredSteps = [];
+        for (let i = 0; i < combinedSteps.length; i++) {
+          const curr = combinedSteps[i];
+          const next = combinedSteps[i + 1];
+          if (curr.type === 'navigate' && next && next.type === 'navigate') {
+            try {
+              const u1 = new URL(curr.url);
+              const u2 = new URL(next.url);
+              if (u1.hostname === u2.hostname) {
+                continue; // Prefer the more specific second navigation
+              }
+            } catch(e) {}
+          }
+          filteredSteps.push(curr);
+        }
+        console.log('[SQ] Multi-stage compound plan resolved:', filteredSteps.map(s => s.label));
+        return filteredSteps.map((s, idx) => ({ ...s, id: idx, status: 'pending' }));
       }
     }
   }
@@ -1776,6 +1802,19 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
                     findings.push(`Wikipedia Article: ${title}`);
                     paragraphs.forEach(p => findings.push(p.slice(0, 200)));
                   }
+                } else if (window.location.hostname.includes('reddit.com')) {
+                  const posts = document.querySelectorAll('faceplate-tracker[noun="post"], shreddit-post, .Post, div[data-testid="post-container"], a[slot="full-post-link"]');
+                  Array.from(posts).slice(0, 4).forEach((el, i) => {
+                    const title = (el.querySelector('h2, a[slot="title"], [data-testid="post-title"]')?.innerText || el.getAttribute('post-title') || '').trim();
+                    if (title) findings.push(`Reddit Finding: ${title}`);
+                  });
+                } else if (window.location.hostname.includes('amazon.com')) {
+                  const products = document.querySelectorAll('[data-component-type="s-search-result"], .s-result-item');
+                  Array.from(products).slice(0, 4).forEach(el => {
+                    const title = (el.querySelector('h2 span, h2 a')?.innerText || '').trim();
+                    const price = (el.querySelector('.a-price .a-offscreen')?.innerText || '').trim();
+                    if (title) findings.push(`${title}${price ? ' (' + price + ')' : ''}`);
+                  });
                 }
 
                 return findings;
