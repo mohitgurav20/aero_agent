@@ -79,6 +79,14 @@ document.addEventListener('DOMContentLoaded', () => {
     voiceStopBtn.addEventListener('click', () => {
       if (isRecording) handleToggleMic();
     });
+  // Event Listener: Reload Extension & Service Worker
+  const reloadExtBtn = document.getElementById('reload-ext-btn');
+  if (reloadExtBtn) {
+    reloadExtBtn.addEventListener('click', () => {
+      reloadExtBtn.style.transform = 'rotate(360deg)';
+      updateStatus('thinking', 'Reloading extension service worker...');
+      setTimeout(() => chrome.runtime.reload(), 200);
+    });
   }
 
   // Event Listener: Toggle Tags Overlay
