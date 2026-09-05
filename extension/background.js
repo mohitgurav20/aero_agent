@@ -863,27 +863,45 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
   let siteUrl = null;
   let remainingQuery = q;
 
-  const explicitSiteMatch = q.match(/^(?:open|go\s+to|navigate\s+to|visit|launch)\s+(?:(?:the|my)\s+)?([a-zA-Z0-9_\-\.]+)\s+(?:website|app|page|site|webpage)(?:\s+(?:for|to)\s+([^,]+?))?(?:\s+(?:and\s+then|then|and|with|\&|;)\s+(.*))?$/i);
-  const genericSiteMatch = q.match(/^(?:open|go\s+to|navigate\s+to|visit|launch)\s+(?:(?:the|my)\s+)?([a-zA-Z0-9_\-\.]+)(?:\s+(?:for|to)\s+([^,]+?))?(?:\s+(?:and\s+then|then|and|with|\&|;)\s+(.*))?$/i);
+  // Check known multi-word & single-word domains first (e.g. 'google finance', 'mdn web docs', 'hacker news')
+  let matchedKnownSite = null;
+  for (const name of Object.keys(KNOWN_SITE_DOMAINS)) {
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    const r = new RegExp('^(?:open|go\\s+to|navigate\\s+to|visit|launch)\\s+(?:(?:the|my)\\s+)?(' + esc + ')(?:\\s+(?:website|app|page|site|webpage))?(?:\\s*[,;]\\s*|\\s+(?:and\\s+then|then|after\\s+that|and\\s+also|and|with|\\&)\\s*|\\s+)(.*)$', 'i');
+    const m = q.match(r);
+    if (m) {
+      matchedKnownSite = { site: name, url: KNOWN_SITE_DOMAINS[name], remaining: (m[2] || '').trim() };
+      break;
+    }
+  }
 
-  const siteFound = explicitSiteMatch || genericSiteMatch;
-  if (siteFound) {
-    let rawSite = siteFound[1].trim().toLowerCase();
-    let siteTopic = (siteFound[2] || '').trim().toLowerCase();
-    remainingQuery = (siteFound[3] || '').trim();
+  if (matchedKnownSite) {
+    siteUrl = matchedKnownSite.url;
+    remainingQuery = matchedKnownSite.remaining;
+    steps.push({ type: 'navigate', url: siteUrl, label: `Open ${matchedKnownSite.site}` });
+  } else {
+    const explicitSiteMatch = q.match(/^(?:open|go\s+to|navigate\s+to|visit|launch)\s+(?:(?:the|my)\s+)?([a-zA-Z0-9_\-\.]+)\s+(?:website|app|page|site|webpage)(?:\s+(?:for|to)\s+([^,]+?))?(?:(?:\s*[,;]\s*|\s+(?:and\s+then|then|after\s+that|and\s+also|and|with|\&)\s+|\s+)(.*))?$/i);
+    const genericSiteMatch = q.match(/^(?:open|go\s+to|navigate\s+to|visit|launch)\s+(?:(?:the|my)\s+)?([a-zA-Z0-9_\-\.]+)(?:\s+(?:for|to)\s+([^,]+?))?(?:(?:\s*[,;]\s*|\s+(?:and\s+then|then|after\s+that|and\s+also|and|with|\&)\s+|\s+)(.*))?$/i);
 
-    const skipSites = ['the', 'a', 'an', 'my', 'new', 'this'];
-    if (!skipSites.includes(rawSite)) {
-      if (rawSite === 'programiz' && (siteTopic.includes('python') || siteTopic.includes('compiler') || q.includes('python') || q.includes('complier') || q.includes('compiler'))) {
-        siteUrl = 'https://www.programiz.com/python-programming/online-compiler/';
-      } else if (KNOWN_SITE_DOMAINS[rawSite]) {
-        siteUrl = KNOWN_SITE_DOMAINS[rawSite];
-      } else if (rawSite.includes('.')) {
-        siteUrl = `https://${rawSite}`;
-      } else {
-        siteUrl = `https://${rawSite}.com`;
+    const siteFound = explicitSiteMatch || genericSiteMatch;
+    if (siteFound) {
+      let rawSite = siteFound[1].trim().toLowerCase();
+      let siteTopic = (siteFound[2] || '').trim().toLowerCase();
+      remainingQuery = (siteFound[3] || '').trim();
+
+      const skipSites = ['the', 'a', 'an', 'my', 'new', 'this'];
+      if (!skipSites.includes(rawSite)) {
+        if (rawSite === 'programiz' && (siteTopic.includes('python') || siteTopic.includes('compiler') || q.includes('python') || q.includes('complier') || q.includes('compiler'))) {
+          siteUrl = 'https://www.programiz.com/python-programming/online-compiler/';
+        } else if (KNOWN_SITE_DOMAINS[rawSite]) {
+          siteUrl = KNOWN_SITE_DOMAINS[rawSite];
+        } else if (rawSite.includes('.')) {
+          siteUrl = `https://${rawSite}`;
+        } else {
+          siteUrl = `https://${rawSite}.com`;
+        }
+        steps.push({ type: 'navigate', url: siteUrl, label: `Open ${rawSite}` });
       }
-      steps.push({ type: 'navigate', url: siteUrl, label: `Open ${rawSite}` });
     }
   }
 
@@ -993,8 +1011,9 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
     queryTerm = queryTerm.replace(/\s+(?:on|in)\s+[a-zA-Z0-9_\-\.]+$/i, '').trim();
     queryTerm = queryTerm.replace(/^(?:me\s+)?(?:repos?\s+(?:for|about|on|of)\s+|for\s+me\s+|me\s+(?:for|about|on|to)\s+|me\s+)/i, '').trim();
 
-    const hasClickResult = /\b(?:click|open|select|tap|play)\s+(?:the\s+)?(?:first|top|second|third|1st)\s+(?:search\s+)?(?:result|item|video|repo|product|link)\b/i.test(remainingQuery || q);
+    const hasClickResult = /\b(?:click|open|select|tap|play)\s+(?:the\s+)?(?:first|top|second|third|1st)\s+(?:search\s+)?(?:result|item|video|repo|product|link|dataset|story|article|problem|stock|ticker|company|discussion)\b/i.test(remainingQuery || q);
     queryTerm = queryTerm.replace(/\s+(?:and\s+then|then|after\s+that|and\s+also|and)\s+(?:click|open|select|tap|play)\s+.*$/i, '').trim();
+    queryTerm = queryTerm.replace(/[,;]+$/g, '').trim();
 
     if (queryTerm) {
       if (siteUrl && siteUrl.includes('github.com')) {
