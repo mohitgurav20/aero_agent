@@ -79,6 +79,8 @@ document.addEventListener('DOMContentLoaded', () => {
     voiceStopBtn.addEventListener('click', () => {
       if (isRecording) handleToggleMic();
     });
+  }
+
   // Event Listener: Reload Extension & Service Worker
   const reloadExtBtn = document.getElementById('reload-ext-btn');
   if (reloadExtBtn) {

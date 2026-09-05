@@ -981,6 +981,8 @@
         console.log('[Content] Matched Public radio option:', publicRadio);
         return publicRadio;
       }
+    }
+
     // Dedicated Search Results / Video / Dataset top item handler
     if (rawTarget.includes('search result') || rawTarget.includes('top result') ||
         rawTarget.includes('first result') || rawTarget.includes('first dataset') ||
