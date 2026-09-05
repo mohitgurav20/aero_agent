@@ -981,6 +981,40 @@
         console.log('[Content] Matched Public radio option:', publicRadio);
         return publicRadio;
       }
+    // Dedicated Search Results / Video / Dataset top item handler
+    if (rawTarget.includes('search result') || rawTarget.includes('top result') ||
+        rawTarget.includes('first result') || rawTarget.includes('first dataset') ||
+        rawTarget.includes('top video') || rawTarget.includes('first video') ||
+        rawTarget.includes('first search result')) {
+      const hostname = window.location.hostname;
+      let topItem = null;
+
+      if (hostname.includes('wikipedia.org')) {
+        topItem = document.querySelector('.mw-search-results li a, .mw-search-result-heading a, .searchresults a');
+      } else if (hostname.includes('youtube.com')) {
+        topItem = document.querySelector('ytd-video-renderer a#video-title, #contents ytd-video-renderer a#video-title, ytd-rich-item-renderer a#video-title, a#video-title');
+      } else if (hostname.includes('amazon.')) {
+        topItem = document.querySelector('div[data-component-type="s-search-result"] h2 a, .s-result-item h2 a, a.a-link-normal.s-underline-text');
+      } else if (hostname.includes('reddit.com')) {
+        topItem = document.querySelector('a[data-testid="post-title-text"], a[data-testid="post-title"], a[slot="full-post-link"], shresh-post a');
+      } else if (hostname.includes('kaggle.com')) {
+        topItem = document.querySelector('a[href*="/datasets/"], div[role="list"] a, div[data-testid="list-item"] a');
+      } else if (hostname.includes('leetcode.com')) {
+        topItem = document.querySelector('a[href*="/problems/"], div[role="rowgroup"] a');
+      } else if (hostname.includes('google.')) {
+        topItem = document.querySelector('#rso a:has(h3), #search .g a, div[role="listitem"] a, a[href*="/quote/"]');
+      } else if (hostname.includes('w3schools.com')) {
+        topItem = document.querySelector('a[href*="/python/"], a[href*="/tutorial/"], #main a, a.w3-button');
+      }
+
+      if (!topItem) {
+        topItem = document.querySelector('main a:has(h2), main a:has(h3), #rso a:has(h3), article a, .results a, [role="feed"] a');
+      }
+
+      if (topItem) {
+        console.log('[Content] Matched top search result element:', topItem);
+        return topItem;
+      }
     }
 
     const candidates = Array.from(document.querySelectorAll('button, a, input, select, textarea, [role="button"], [role="link"], div[onclick], span[onclick], iframe, [tabindex]'));

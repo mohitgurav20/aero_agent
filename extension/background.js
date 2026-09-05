@@ -1605,7 +1605,7 @@ async function runStepQueue(tabId) {
     const nextStep = remainingSteps[0];
     const isCrossDomainSwitch = nextStep && nextStep.type === 'navigate';
 
-    let waitMs = step.type === 'click' ? 1500 : (step.type === 'select' ? 900 : 700);
+    let waitMs = step.type === 'click' ? 1500 : (step.type === 'select' ? 900 : (step.type === 'press_key' && step.key === 'Enter' ? 2200 : 700));
     if (isInspection || (isCrossDomainSwitch && step.type === 'click')) {
       waitMs = 3800; // 3.8s visible window so user and judges can clearly read the findings
       broadcastStatus('thinking', `Analyzing top findings on page...`);
@@ -1652,16 +1652,25 @@ async function runStepQueue(tabId) {
       }]);
     }
 
-    const isConnErr = err.message && (err.message.includes('Could not establish connection') || err.message.includes('Receiving end does not exist'));
+    const isConnErr = err.message && (
+      err.message.includes('Could not establish connection') ||
+      err.message.includes('Receiving end does not exist') ||
+      err.message.includes('back/forward cache') ||
+      err.message.includes('page keeping the extension') ||
+      err.message.includes('message channel is closed') ||
+      err.message.includes('message port closed') ||
+      err.message.includes('closed before a response') ||
+      err.message.includes('Frame with ID 0 was removed')
+    );
     if (isConnErr && targetTabId) {
       step._connectRetries = (step._connectRetries || 0) + 1;
-      if (step._connectRetries <= 3) {
-        console.log(`[SQ] Content script not connected yet, injecting and retrying (${step._connectRetries}/3)...`);
-        broadcastStatus('thinking', `Connecting to page (${step._connectRetries}/3)...`);
+      if (step._connectRetries <= 6) {
+        console.log(`[SQ] Page navigating or content script connecting, waiting and retrying (${step._connectRetries}/6)...`);
+        broadcastStatus('thinking', `Waiting for page to finish loading (${step._connectRetries}/6)...`);
+        await new Promise(r => setTimeout(r, 1200));
         try {
           await chrome.scripting.executeScript({ target: { tabId: targetTabId }, files: ['pii_detector.js', 'content.js'] });
         } catch (injErr) {}
-        await new Promise(r => setTimeout(r, 800));
         activeTask._isExecuting = false;
         return runStepQueue(targetTabId);
       }
@@ -1939,6 +1948,15 @@ function resolveStepToActions(step, elements) {
 
   if (step.type === 'click') {
     const rawTarget = step.target.toLowerCase();
+
+    // Fast-path search result / top video / dataset click to content.js semantic recovery
+    const isSearchResultClick = rawTarget.includes('search result') || rawTarget.includes('top result') ||
+                                rawTarget.includes('first result') || rawTarget.includes('top video') ||
+                                rawTarget.includes('first video') || rawTarget.includes('first dataset');
+    if (isSearchResultClick) {
+      return [{ step: 0, tag_id: 0, action: 'click', description: step.label || step.target }];
+    }
+
     const clickableEls = elements.filter(el => !isInputEl(el) || el.type === 'radio' || el.type === 'button' || el.type === 'submit');
 
     // Dedicated Google Account Chooser handler (e.g. accounts.google.com)
