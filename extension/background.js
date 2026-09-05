@@ -917,7 +917,8 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
     else if (/\b(?:java)\b/i.test(fullText) && !/javascript/i.test(fullText)) lang = 'java';
     else if (/\b(?:c|c-lang)\b/i.test(fullText) && !/c\+\+/i.test(fullText)) lang = 'c';
 
-    const topicMatch = fullText.match(/(?:for|about|to|of)\s+([^,]+?)(?:\s+(?:and\s+then|then|and|with|\&|;)\s+.*)?$/i)
+    const topicMatch = fullText.match(/(?:write|create|make|generate)\s+([^,]+?)\s+(?:in|using)\s+/i)
+                    || fullText.match(/(?:for|about|to|of)\s+([^,]+?)(?:\s+(?:and\s+then|then|and|with|\&|;)\s+.*)?$/i)
                     || fullText.match(/(?:calculator|fibonacci|prime|factorial|sort|search|tree|graph)/i);
     let topic = topicMatch ? (topicMatch[1] || topicMatch[0]).trim() : 'calculator';
     topic = topic.replace(/\s+(?:and|with)\s+.*$/i, '').replace(/^(?:a|the|some)\s+/i, '').trim();
