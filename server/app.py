@@ -272,18 +272,33 @@ def compose_email():
     subject = str(data.get("subject") or "").strip()
     goal = str(data.get("goal") or "").strip()
     topic = str(data.get("topic") or subject or goal).strip()
+    findings = data.get("findings") or []
 
     salutation_name = recipient.split("@")[0].replace(".", " ").replace("_", " ").title() if "@" in recipient else recipient.title()
+
+    findings_prompt_section = ""
+    if findings and isinstance(findings, list) and len(findings) > 0:
+        cleaned_findings = [str(f).strip() for f in findings if str(f).strip()]
+        if cleaned_findings:
+            findings_bullets = "\n".join(f"- {f}" for f in cleaned_findings[:6])
+            findings_prompt_section = (
+                f"\n\nLIVE SEARCH RESULTS EXTRACTED DIRECTLY FROM THE BROWSER PAGE:\n"
+                f"{findings_bullets}\n\n"
+                f"CRITICAL REQUIREMENT:\n"
+                f"You MUST directly cite, analyze, and recommend the real projects/articles listed above. "
+                f"Do NOT invent or hallucinate alternative names when these real findings are provided."
+            )
 
     prompt = (
         f"You are an intelligent AI assistant writing a clear, polite, and professional email message.\n"
         f"Recipient: {recipient}\n"
         f"Subject: {subject}\n"
-        f"Topic / Context: {topic}\n\n"
+        f"Topic / Context: {topic}\n"
+        f"{findings_prompt_section}\n\n"
         f"Rules:\n"
         f"1. Begin with a formal greeting: 'Dear {salutation_name},'.\n"
         f"2. Write 2-3 concise, well-structured paragraphs providing informative details and summarizing key findings regarding '{topic}'.\n"
-        f"3. If the topic asks for alternatives, tools, or options, present the top 3 with numbered bullet points and brief descriptions.\n"
+        f"3. If real browser search findings were provided above, present the top 3 with numbered bullet points using their real names and descriptions.\n"
         f"4. Sign off with 'Warm regards,\nAero Agent'.\n"
         f"5. Output ONLY the email body text. Do NOT include any Subject header or markdown fences."
     )
@@ -451,35 +466,36 @@ def decompose_goal():
         "JSON Steps:"
     )
 
-    try:
-        resp = ollama_client.generate(
-            role="draft",
-            prompt=prompt,
-            options={"temperature": 0.1, "top_p": 0.9}
-        )
-        raw = resp.text.strip()
-        import re
-        m = re.search(r"\[.*\]", raw, re.DOTALL)
-        if m:
-            steps = json.loads(m.group(0))
-            if isinstance(steps, list) and len(steps) > 0:
-                valid_steps = []
-                for s in steps:
-                    if isinstance(s, dict) and "type" in s:
-                        valid_steps.append({
-                            "type": s.get("type", "click"),
-                            "url": s.get("url"),
-                            "target": s.get("target"),
-                            "field": s.get("field"),
-                            "value": s.get("value"),
-                            "key": s.get("key"),
-                            "label": s.get("label") or f"{s.get('type')} {s.get('target') or s.get('url') or s.get('field') or ''}".strip()
-                        })
-                if valid_steps:
-                    log.info("LLM dynamically decomposed goal '%s' into %d steps", goal[:50], len(valid_steps))
-                    return jsonify({"status": "success", "source": "llm", "steps": valid_steps})
-    except Exception as e:
-        log.warning("LLM dynamic goal decomposition error: %s", e)
+    for role in ("text", "draft"):
+        try:
+            resp = ollama_client.generate(
+                role=role,
+                prompt=prompt,
+                options={"temperature": 0.1, "top_p": 0.9}
+            )
+            raw = resp.text.strip()
+            import re
+            m = re.search(r"\[.*\]", raw, re.DOTALL)
+            if m:
+                steps = json.loads(m.group(0))
+                if isinstance(steps, list) and len(steps) > 0:
+                    valid_steps = []
+                    for s in steps:
+                        if isinstance(s, dict) and "type" in s:
+                            valid_steps.append({
+                                "type": s.get("type", "click"),
+                                "url": s.get("url"),
+                                "target": s.get("target"),
+                                "field": s.get("field"),
+                                "value": s.get("value"),
+                                "key": s.get("key"),
+                                "label": s.get("label") or f"{s.get('type')} {s.get('target') or s.get('url') or s.get('field') or ''}".strip()
+                            })
+                    if valid_steps:
+                        log.info("LLM dynamically decomposed goal '%s' into %d steps via role '%s'", goal[:50], len(valid_steps), role)
+                        return jsonify({"status": "success", "source": f"llm-{role}", "steps": valid_steps})
+        except Exception as e:
+            log.warning("LLM dynamic goal decomposition error with role '%s': %s", role, e)
 
     return jsonify({"status": "fallback", "source": "heuristic"})
 

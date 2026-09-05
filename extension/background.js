@@ -770,6 +770,40 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
     }
   }
 
+  // ── 4B. WIKIPEDIA RESEARCH WORKFLOW (e.g. "research vector databases on wikipedia") ──
+  const isWikiSearchIntent = /\b(?:wikipedia|wiki)\b/i.test(q) &&
+                             (/\b(?:search|find|look|for|research|explore|read|article|about)\b/i.test(q) || !q.includes('create'));
+
+  if (isWikiSearchIntent) {
+    let queryTerm = q
+      .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+      .replace(/^(?:open|go\s+to|visit)\s+(?:the\s+)?(?:wikipedia|wiki)\s*(?:and\s+then|and|,)?\s*/i, '')
+      .replace(/^(?:research(?:\s+for)?|search(?:\s+for)?|find|look(?:\s+up)?|explore|read)\s+(?:the\s+)?(?:top\s+\d+\s+)?/i, '')
+      .replace(/^(?:the\s+)?(?:wikipedia|wiki)\s*(?:search(?:\s+for)?|for)?\s*/i, '')
+      .replace(/\s+(?:on|in|at|from)\s+(?:the\s+)?(?:wikipedia|wiki).*$/i, '')
+      .replace(/\s+(?:and\s+then|then|after\s+that|and\s+also|and)\s+(?:click|open|select|tap|play|inspect|summarize)\s+.*$/i, '')
+      .replace(/^(?:search(?:\s+for)?|find|look(?:\s+up)?|explore|read)\s+/i, '')
+      .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+      .trim();
+
+    if (queryTerm) {
+      const searchUrl = `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(queryTerm)}`;
+      steps.push({
+        type: 'navigate',
+        url: 'https://en.wikipedia.org',
+        label: 'Open Wikipedia'
+      });
+      steps.push({
+        type: 'navigate',
+        url: searchUrl,
+        label: `Research Wikipedia for "${queryTerm}"`,
+        _inspectAfter: true  // Flag: pause and extract findings
+      });
+      const displayTopic = `${queryTerm.charAt(0).toUpperCase() + queryTerm.slice(1)} on Wikipedia`;
+      return { steps, context: { ...context, hasNavigated: true, topic: displayTopic, queryTerm } };
+    }
+  }
+
   const siteSearchMatch = q.match(/^(?:search(?:\s+for)?|find)\s+(?:the\s+)?([a-zA-Z0-9_\-\.]+)\s+for\s+(.+)$/i);
   const searchOnSiteMatch = q.match(/^(?:search(?:\s+for)?|find)\s+(.+?)\s+(?:on|in)\s+([a-zA-Z0-9_\-\.]+)$/i);
 
@@ -1052,8 +1086,8 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
   for (const [p, r] of PHONETIC) q = q.replace(p, r);
 
   // ── 1. MULTI-STAGE COMPOUND SENTENCE SPLITTING (High Precision, Zero Hallucination) ─
-  // Detect sequential transitions: "Search GitHub ..., then open Gmail ..." or "Search GitHub ... and email ..."
-  const stageSplitter = /\s*(?:,\s*)?(?:then|after\s+that|and\s+then|and\s+after\s+that|later|and\s+later)\s+|\s+and\s+(?=(?:email\s+(?:top\s+\d+\s+)?to|email\s+to|compose\s+email|send\s+(?:an?\s+)?email)\b)\s*/i;
+  // Detect sequential transitions: "Search GitHub ..., then open Gmail ..." or "Research ... on Wikipedia and email ..."
+  const stageSplitter = /\s*(?:,\s*)?(?:then|after\s+that|and\s+then|and\s+after\s+that|later|and\s+later)\s+|\s+and\s+(?=(?:(?:email|compose|send|draft|write)\b.*?\bto\b|(?:open|launch|visit|go\s+to)\s+(?:gmail|google\s*mail)\b))/i;
   if (stageSplitter.test(q)) {
     const rawStages = q.split(stageSplitter).map(s => s.trim()).filter(Boolean);
     if (rawStages.length > 1) {
@@ -1422,6 +1456,39 @@ async function runStepQueue(tabId) {
     }
   }
 
+  // Ground message body with REAL live search findings if extracted from research stage
+  if (step.type === 'type' && (step.field?.includes('body') || step.field?.includes('message'))) {
+    if (activeTask.extractedFindings && activeTask.extractedFindings.length > 0) {
+      console.log('[SQ] Dynamically grounding email with live extracted findings:', activeTask.extractedFindings);
+      broadcastStatus('thinking', 'Synthesizing email from live browser search findings...');
+      try {
+        const recipientStep = activeTask.steps.find(s => s.field?.includes('recipient') || s.field?.includes('to'));
+        const subjectStep = activeTask.steps.find(s => s.field?.includes('subject'));
+        const resp = await fetch('http://127.0.0.1:5000/api/compose_email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipient: recipientStep?.value || 'there',
+            subject: subjectStep?.value || activeTask.goal,
+            topic: subjectStep?.value || activeTask.goal,
+            findings: activeTask.extractedFindings,
+            goal: activeTask.goal
+          }),
+          signal: AbortSignal.timeout(12000)
+        });
+        if (resp.ok) {
+          const json = await resp.json();
+          if (json.body) {
+            step.value = json.body;
+            console.log('[SQ] Successfully grounded email using source:', json.source);
+          }
+        }
+      } catch (err) {
+        console.warn('[SQ] Live findings email synthesis fallback:', err.message);
+      }
+    }
+  }
+
   // Build a mini action plan for this single step using DOM matching
   let actions = resolveStepToActions(step, elements);
 
@@ -1615,65 +1682,116 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       console.log('[SQ] Tab navigation complete, resuming StepQueue on tab:', tabId, tab.url);
       activeTask.status = 'running';
 
-      // If this is a GitHub search results page, pause to show results cleanly
+      // If this is a search results page (GitHub or Wikipedia), pause to show results and extract real findings
       const isGithubSearch = (tab.url && tab.url.includes('github.com/search')) ||
                              (activeTask.navigatingUrl && activeTask.navigatingUrl.includes('github.com/search'));
-      const needsInspect = activeTask._pendingInspect || isGithubSearch;
+      const isWikiSearch = (tab.url && tab.url.includes('wikipedia.org')) ||
+                           (activeTask.navigatingUrl && activeTask.navigatingUrl.includes('wikipedia.org'));
+      const needsInspect = activeTask._pendingInspect || isGithubSearch || isWikiSearch;
       if (needsInspect) {
         activeTask._pendingInspect = false;
         activeTask.status = 'inspecting';
-        broadcastStatus('thinking', '🔍 GitHub search loaded. Analyzing top repositories...');
+        const inspectLabel = isWikiSearch ? 'Wikipedia knowledge' : 'GitHub search';
+        broadcastStatus('thinking', `🔍 ${inspectLabel} loaded. Analyzing top live findings...`);
 
-        // Inject a VISUAL-ONLY highlight (no clicks, no navigation) on the top repo cards
+        // Inject VISUAL highlight AND extract real live findings from the page
         setTimeout(async () => {
           try {
-            await chrome.scripting.executeScript({
+            const scriptResults = await chrome.scripting.executeScript({
               target: { tabId },
               func: () => {
-                // Highlight top 3 repository cards with a glowing border and badge
-                const cards = document.querySelectorAll(
-                  '[data-testid="results-list"] .Box-row, [data-testid="search-result"], .search-result-item, .repo-list-item, li.repo-list-item, div[data-testid="results-list"] > div'
-                );
-                const targets = cards.length > 0 ? Array.from(cards).slice(0, 3)
-                  : Array.from(document.querySelectorAll('a[href*="/"] h3')).slice(0, 3).map(h => h.closest('div, li, article') || h);
+                const findings = [];
+                const isWiki = window.location.hostname.includes('wikipedia.org');
+                const isGithub = window.location.hostname.includes('github.com');
 
-                targets.forEach((el, i) => {
-                  if (!el) return;
-                  el.style.cssText += `
-                    outline: 3px solid #7c3aed !important;
-                    outline-offset: 4px !important;
-                    border-radius: 8px !important;
-                    box-shadow: 0 0 20px rgba(124,58,237,0.6) !important;
-                    transition: all 0.3s ease !important;
-                    position: relative !important;
-                  `;
-                  if (!el.querySelector('.sih-inspect-badge')) {
-                    const badge = document.createElement('div');
-                    badge.className = 'sih-inspect-badge';
-                    badge.textContent = `★ Top Finding #${i + 1}`;
-                    badge.style.cssText = `
-                      position: absolute;
-                      top: -12px;
-                      right: 12px;
-                      background: linear-gradient(135deg, #7c3aed, #4f46e5);
-                      color: #fff;
-                      font-size: 11px;
-                      font-weight: 700;
-                      padding: 2px 10px;
-                      border-radius: 12px;
-                      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-                      z-index: 1000;
-                      pointer-events: none;
+                if (isGithub) {
+                  const cards = document.querySelectorAll(
+                    '[data-testid="results-list"] .Box-row, [data-testid="search-result"], .search-result-item, .repo-list-item, li.repo-list-item, div[data-testid="results-list"] > div'
+                  );
+                  const targets = cards.length > 0 ? Array.from(cards).slice(0, 4)
+                    : Array.from(document.querySelectorAll('a[href*="/"] h3')).slice(0, 4).map(h => h.closest('div, li, article') || h);
+
+                  targets.forEach((el, i) => {
+                    if (!el) return;
+                    el.style.cssText += `
+                      outline: 3px solid #7c3aed !important;
+                      outline-offset: 4px !important;
+                      border-radius: 8px !important;
+                      box-shadow: 0 0 20px rgba(124,58,237,0.6) !important;
+                      transition: all 0.3s ease !important;
+                      position: relative !important;
                     `;
-                    el.appendChild(badge);
+                    if (!el.querySelector('.sih-inspect-badge')) {
+                      const badge = document.createElement('div');
+                      badge.className = 'sih-inspect-badge';
+                      badge.textContent = `★ Top Finding #${i + 1}`;
+                      badge.style.cssText = `
+                        position: absolute;
+                        top: -12px;
+                        right: 12px;
+                        background: linear-gradient(135deg, #7c3aed, #4f46e5);
+                        color: #fff;
+                        font-size: 11px;
+                        font-weight: 700;
+                        padding: 2px 10px;
+                        border-radius: 12px;
+                        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+                        z-index: 1000;
+                        pointer-events: none;
+                      `;
+                      el.appendChild(badge);
+                    }
+
+                    const titleEl = el.querySelector('a[href*="/"]') || el.querySelector('h3') || el;
+                    const descEl = el.querySelector('.search-match, [data-testid="search-result-desc"], p, .color-fg-muted') || el;
+                    const titleText = (titleEl.innerText || titleEl.textContent || '').trim().replace(/\s+/g, ' ');
+                    const descText = (descEl.innerText || descEl.textContent || '').trim().replace(/\s+/g, ' ');
+                    if (titleText) {
+                      findings.push(`${titleText}: ${descText.slice(0, 150)}`);
+                    }
+                  });
+                } else if (isWiki) {
+                  const wikiResults = document.querySelectorAll('.mw-search-result, .mw-search-results li, .searchresults li');
+                  if (wikiResults.length > 0) {
+                    Array.from(wikiResults).slice(0, 4).forEach((el, i) => {
+                      el.style.cssText += `
+                        outline: 3px solid #059669 !important;
+                        outline-offset: 4px !important;
+                        border-radius: 8px !important;
+                        box-shadow: 0 0 20px rgba(5,150,105,0.6) !important;
+                        position: relative !important;
+                      `;
+                      const h = el.querySelector('.mw-search-result-heading, a');
+                      const s = el.querySelector('.searchresult, .mw-search-result-data');
+                      const hText = (h?.innerText || '').trim();
+                      const sText = (s?.innerText || '').trim();
+                      if (hText) findings.push(`${hText}: ${sText.slice(0, 150)}`);
+                    });
+                  } else {
+                    const title = document.querySelector('#firstHeading')?.innerText || document.title;
+                    const paragraphs = Array.from(document.querySelectorAll('#mw-content-text p'))
+                      .map(p => p.innerText.trim())
+                      .filter(t => t.length > 50)
+                      .slice(0, 3);
+                    findings.push(`Wikipedia Article: ${title}`);
+                    paragraphs.forEach(p => findings.push(p.slice(0, 200)));
                   }
-                });
+                }
+
+                return findings;
               }
             });
+
+            const extracted = scriptResults?.[0]?.result || [];
+            if (extracted.length > 0) {
+              activeTask.extractedFindings = extracted;
+              console.log('[SQ] Extracted live search findings from page:', extracted);
+              broadcastStatus('thinking', `Extracted ${extracted.length} live findings. Proceeding to next stage...`);
+            }
           } catch(e) {
-            console.log('[SQ] GitHub highlight inject error:', e.message);
+            console.log('[SQ] Search highlight/extract error:', e.message);
           }
-          // 4.5-second visible pause so judges & user can clearly see and read GitHub search results
+          // 4.5-second visible pause so judges & user can clearly see and read search results
           setTimeout(() => {
             if (activeTask && activeTask.status === 'inspecting') {
               activeTask.status = 'running';
