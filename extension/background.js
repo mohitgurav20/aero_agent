@@ -878,6 +878,54 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
   if (matchedKnownSite) {
     siteUrl = matchedKnownSite.url;
     remainingQuery = matchedKnownSite.remaining;
+
+    // Direct Search / Problem / Topic Intent on Known Site
+    const searchIntent = remainingQuery.match(/^(?:search(?:\s+for)?|find|look(?:\s+for)?)\s+([^,]+?)(?:(?:\s+(?:and\s+then|then|after\s+that|and\s+also|and)\s+(?:click|open|select|tap|play|inspect|summarize|solve)\s+.*|\s*[,;]\s*.*)?)$/i);
+    if (searchIntent) {
+      let cleanTerm = searchIntent[1]
+        .replace(/\s+(?:and\s+then|then|after\s+that|and\s+also|and)\s+(?:click|open|select|tap|play|inspect|summarize|solve)\s+.*$/i, '')
+        .replace(/\s+(?:problem|tutorial|documentation|docs|guide|solution|article|course|video)$/i, '')
+        .trim();
+
+      let targetSearchUrl = null;
+      if (matchedKnownSite.site === 'leetcode') {
+        targetSearchUrl = `https://leetcode.com/problemset/?search=${encodeURIComponent(cleanTerm)}`;
+      } else if (matchedKnownSite.site === 'w3schools') {
+        targetSearchUrl = `https://www.google.com/search?q=site%3Aw3schools.com+${encodeURIComponent(cleanTerm)}`;
+      } else if (matchedKnownSite.site === 'kaggle') {
+        targetSearchUrl = `https://www.kaggle.com/search?q=${encodeURIComponent(cleanTerm)}`;
+      } else if (matchedKnownSite.site === 'reddit') {
+        targetSearchUrl = `https://www.reddit.com/search/?q=${encodeURIComponent(cleanTerm)}`;
+      } else if (matchedKnownSite.site === 'amazon') {
+        targetSearchUrl = `https://www.amazon.in/s?k=${encodeURIComponent(cleanTerm)}`;
+      } else if (matchedKnownSite.site === 'youtube') {
+        targetSearchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(cleanTerm)}`;
+      } else if (matchedKnownSite.site === 'github') {
+        targetSearchUrl = `https://github.com/search?q=${encodeURIComponent(cleanTerm)}&type=repositories`;
+      } else if (matchedKnownSite.site === 'google finance' || matchedKnownSite.site === 'finance') {
+        targetSearchUrl = `https://www.google.com/finance/?q=${encodeURIComponent(cleanTerm)}`;
+      }
+
+      if (targetSearchUrl) {
+        steps.push({
+          type: 'navigate',
+          url: targetSearchUrl,
+          label: `Search ${matchedKnownSite.site} for "${cleanTerm}"`,
+          _inspectAfter: true
+        });
+
+        const hasClickIntent = /\b(?:click|open|select|tap|first|top|solve)\b/i.test(remainingQuery);
+        if (hasClickIntent) {
+          steps.push({
+            type: 'click',
+            target: 'first search result',
+            label: `Click top ${cleanTerm} result`
+          });
+        }
+        return { steps, context: { ...context, hasNavigated: true, topic: `${cleanTerm} on ${matchedKnownSite.site}` } };
+      }
+    }
+
     steps.push({ type: 'navigate', url: siteUrl, label: `Open ${matchedKnownSite.site}` });
   } else {
     const explicitSiteMatch = q.match(/^(?:open|go\s+to|navigate\s+to|visit|launch)\s+(?:(?:the|my)\s+)?([a-zA-Z0-9_\-\.]+)\s+(?:website|app|page|site|webpage)(?:\s+(?:for|to)\s+([^,]+?))?(?:(?:\s*[,;]\s*|\s+(?:and\s+then|then|after\s+that|and\s+also|and|with|\&)\s+|\s+)(.*))?$/i);
