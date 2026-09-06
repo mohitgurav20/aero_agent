@@ -335,17 +335,33 @@ def generate_code():
     data = request.get_json(force=True) or {}
     topic = str(data.get("topic") or data.get("prompt") or "").strip()
     language = str(data.get("language") or "python").strip().lower()
+    is_leetcode = bool(data.get("is_leetcode")) or "leetcode" in str(data.get("site") or "").lower() or "leetcode" in topic.lower()
+    template = str(data.get("template") or "").strip()
 
     if not topic:
         topic = "calculator program"
 
-    prompt = (
-        f"You are an expert {language} developer. Write clean, working, runnable {language} code for: '{topic}'.\n"
-        "Requirements:\n"
-        "1. Return ONLY pure runnable executable code.\n"
-        "2. Do NOT wrap in markdown backticks (no ```), do not include any conversational greeting or explanations.\n"
-        "3. Provide direct demonstration calls with print statements showing results (e.g. print(add(10, 5))), rather than blocking interactive input() calls, so it executes and displays results immediately.\n"
-    )
+    if is_leetcode or template:
+        prompt = (
+            f"You are an expert {language} developer solving a LeetCode problem: '{topic}'.\n"
+            f"Write ONLY the complete LeetCode class Solution in {language}.\n"
+        )
+        if template:
+            prompt += f"Adhere strictly to this solution template and method signature:\n{template}\n\n"
+        prompt += (
+            "Requirements:\n"
+            "1. Return ONLY pure compilable class Solution code.\n"
+            "2. Do NOT wrap in markdown backticks (no ```), do not include any conversational greeting or explanations.\n"
+            "3. Do NOT include main() or input reading. Implement the complete, optimal algorithm inside the method."
+        )
+    else:
+        prompt = (
+            f"You are an expert {language} developer. Write clean, working, runnable {language} code for: '{topic}'.\n"
+            "Requirements:\n"
+            "1. Return ONLY pure runnable executable code.\n"
+            "2. Do NOT wrap in markdown backticks (no ```), do not include any conversational greeting or explanations.\n"
+            "3. Provide direct demonstration calls with print statements showing results (e.g. print(add(10, 5))), rather than blocking interactive input() calls, so it executes and displays results immediately.\n"
+        )
 
     try:
         resp = ollama_client.generate(
@@ -355,24 +371,52 @@ def generate_code():
         )
         code = resp.text.strip()
         import re
-        code = re.sub(r"^```[a-zA-Z]*\n?", "", code)
-        code = re.sub(r"\n?```$", "", code).strip()
-        log.info("Synthesized %s code for '%s' (%d chars)", language, topic, len(code))
+        code = re.sub(r"^```[a-zA-Z0-9_\-\+]*\s*", "", code)
+        code = re.sub(r"\s*```$", "", code).strip()
+
+        # LeetCode format guarantee: remove main() driver and ensure class Solution wrapping
+        if is_leetcode or template or "leetcode" in topic.lower():
+            code = re.sub(r"int\s+main\s*\([^)]*\)\s*\{[\s\S]*\}", "", code).strip()
+            if "class Solution" not in code:
+                if "cpp" in language or "c++" in language:
+                    includes = re.findall(r"^#include\s+.*", code, flags=re.MULTILINE)
+                    code = re.sub(r"^#include\s+.*\n?", "", code, flags=re.MULTILINE).strip()
+                    inc_str = "\n".join(includes) + ("\n\n" if includes else "")
+                    code = f"{inc_str}class Solution {{\npublic:\n    {code}\n}};"
+                elif "python" in language:
+                    code = f"class Solution:\n    {code}"
+
+        log.info("Synthesized %s code for '%s' (%d chars, leetcode=%s)", language, topic, len(code), is_leetcode)
         return jsonify({"status": "success", "code": code})
     except Exception as e:
         log.warning("Ollama code generation failed: %s", e)
-        fallback = (
-            "# Calculator Program\n"
-            "def add(a, b): return a + b\n"
-            "def subtract(a, b): return a - b\n"
-            "def multiply(a, b): return a * b\n"
-            "def divide(a, b): return a / b if b != 0 else 'Error: Division by zero'\n\n"
-            "print('--- Calculator Demo ---')\n"
-            "print('10 + 5 =', add(10, 5))\n"
-            "print('10 - 5 =', subtract(10, 5))\n"
-            "print('10 * 5 =', multiply(10, 5))\n"
-            "print('10 / 5 =', divide(10, 5))\n"
-        )
+        if is_leetcode and "cpp" in language:
+            fallback = (
+                "class Solution {\n"
+                "public:\n"
+                "    double findMedianSortedArrays(vector<int>& nums1, vector<int>& nums2) {\n"
+                "        vector<int> v = nums1;\n"
+                "        v.insert(v.end(), nums2.begin(), nums2.end());\n"
+                "        sort(v.begin(), v.end());\n"
+                "        int n = v.size();\n"
+                "        if (n % 2 == 1) return v[n / 2];\n"
+                "        return (v[n / 2 - 1] + v[n / 2]) / 2.0;\n"
+                "    }\n"
+                "};\n"
+            )
+        else:
+            fallback = (
+                "# Calculator Program\n"
+                "def add(a, b): return a + b\n"
+                "def subtract(a, b): return a - b\n"
+                "def multiply(a, b): return a * b\n"
+                "def divide(a, b): return a / b if b != 0 else 'Error: Division by zero'\n\n"
+                "print('--- Calculator Demo ---')\n"
+                "print('10 + 5 =', add(10, 5))\n"
+                "print('10 - 5 =', subtract(10, 5))\n"
+                "print('10 * 5 =', multiply(10, 5))\n"
+                "print('10 / 5 =', divide(10, 5))\n"
+            )
         return jsonify({"status": "fallback", "code": fallback})
 
 

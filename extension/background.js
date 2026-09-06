@@ -235,6 +235,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ status: 'sent' });
       break;
 
+    case 'inject_code_to_main_world': {
+      const tabId = sender.tab?.id || activeTask?.navigatingTabId;
+      if (tabId) {
+        chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'MAIN',
+          func: (codeToSet) => {
+            if (window.monaco && window.monaco.editor) {
+              const editors = window.monaco.editor.getEditors();
+              if (editors && editors.length > 0) {
+                editors[0].setValue(codeToSet);
+                try {
+                  const ta = document.querySelector('.monaco-editor textarea');
+                  if (ta) ta.dispatchEvent(new Event('input', { bubbles: true }));
+                } catch(e) {}
+                return true;
+              }
+            }
+            const aceEl = document.querySelector('.ace_editor');
+            if (aceEl && aceEl.env && aceEl.env.editor) {
+              aceEl.env.editor.setValue(codeToSet, 1);
+              return true;
+            } else if (window.ace) {
+              try {
+                const editor = window.ace.edit(aceEl || 'editor');
+                if (editor) { editor.setValue(codeToSet, 1); return true; }
+              } catch(e) {}
+            }
+            const cmEl = document.querySelector('.CodeMirror');
+            if (cmEl && cmEl.CodeMirror) {
+              cmEl.CodeMirror.setValue(codeToSet);
+              return true;
+            }
+            return false;
+          },
+          args: [message.code]
+        }).then(res => {
+          sendResponse({ success: !!res?.[0]?.result });
+        }).catch(err => {
+          sendResponse({ success: false, error: err.message });
+        });
+        return true;
+      }
+      sendResponse({ success: false, error: 'No active tab' });
+      break;
+    }
+
     case 'crop_patch':
       ensureOffscreenDocument().then(() => {
         chrome.runtime.sendMessage({
@@ -1628,6 +1675,139 @@ async function runStepQueue(tabId) {
     }
   }
 
+  // ── LIVE CODE EDITOR / LEETCODE INTELLIGENT SOLVER ─────────────────────────
+  const isCodeTypeStep = step.type === 'type' && (
+    step.field?.includes('editor') ||
+    step.field?.includes('code') ||
+    step.label?.toLowerCase().includes('write solution') ||
+    step.label?.toLowerCase().includes('write code') ||
+    step.label?.toLowerCase().includes('solve')
+  );
+
+  if (isCodeTypeStep) {
+    console.log('[SQ] Inspecting live editor on page for step:', step.label);
+    broadcastStatus('acting', `Detecting code editor...`);
+
+    // 1. Inspect live editor in MAIN world to extract active language and boilerplate template
+    let liveEditor = null;
+    try {
+      const inspectRes = await chrome.scripting.executeScript({
+        target: { tabId: targetTabId },
+        world: 'MAIN',
+        func: () => {
+          if (window.monaco && window.monaco.editor) {
+            const editors = window.monaco.editor.getEditors();
+            if (editors && editors.length > 0) {
+              const model = editors[0].getModel();
+              return {
+                type: 'monaco',
+                language: model ? model.getLanguageId() : 'cpp',
+                template: editors[0].getValue()
+              };
+            }
+          }
+          const aceEl = document.querySelector('.ace_editor');
+          if (aceEl && aceEl.env && aceEl.env.editor) {
+            return {
+              type: 'ace',
+              language: 'python',
+              template: aceEl.env.editor.getValue()
+            };
+          }
+          return null;
+        }
+      });
+      if (inspectRes && inspectRes[0]?.result) {
+        liveEditor = inspectRes[0].result;
+      }
+    } catch (e) {
+      console.warn('[SQ] Live editor detection error:', e.message);
+    }
+
+    // 2. If live editor is active, dynamically synthesize the optimal solution using local LLM
+    if (liveEditor) {
+      const isLeetCode = activeTask.goal.toLowerCase().includes('leetcode') || (step.label || '').toLowerCase().includes('leetcode') || liveEditor.type === 'monaco';
+      const rawTopic = step.label.replace(/^Write solution for /i, '').replace(/^Write code for /i, '').replace(/^Write python code for /i, '').replace(/^Write cpp code for /i, '').trim();
+      const topic = rawTopic || activeTask.goal;
+      const lang = liveEditor.language || 'cpp';
+
+      broadcastStatus('thinking', `Synthesizing ${lang.toUpperCase()} solution with local LLM...`);
+      try {
+        const resp = await fetch('http://127.0.0.1:5000/api/generate_code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            topic,
+            language: lang,
+            is_leetcode: isLeetCode,
+            template: liveEditor.template || ''
+          }),
+          signal: AbortSignal.timeout(15000)
+        });
+        if (resp.ok) {
+          const json = await resp.json();
+          if (json?.code) {
+            step.value = json.code;
+            console.log(`[SQ] Local LLM generated ${json.code.length} chars of ${lang} code for ${topic}`);
+          }
+        }
+      } catch (e) {
+        console.warn('[SQ] Local LLM live code synthesis fallback:', e.message);
+      }
+    }
+
+    // 3. Inject code into live editor directly in MAIN world (bypassing CSP completely)
+    try {
+      const injectRes = await chrome.scripting.executeScript({
+        target: { tabId: targetTabId },
+        world: 'MAIN',
+        func: (codeToInsert) => {
+          if (window.monaco && window.monaco.editor) {
+            const editors = window.monaco.editor.getEditors();
+            if (editors && editors.length > 0) {
+              editors[0].setValue(codeToInsert);
+              try {
+                const ta = document.querySelector('.monaco-editor textarea');
+                if (ta) ta.dispatchEvent(new Event('input', { bubbles: true }));
+              } catch(e) {}
+              return true;
+            }
+          }
+          const aceEl = document.querySelector('.ace_editor');
+          if (aceEl && aceEl.env && aceEl.env.editor) {
+            aceEl.env.editor.setValue(codeToInsert, 1);
+            return true;
+          } else if (window.ace) {
+            try {
+              const editor = window.ace.edit(aceEl || 'editor');
+              if (editor) { editor.setValue(codeToInsert, 1); return true; }
+            } catch(e) {}
+          }
+          const cmEl = document.querySelector('.CodeMirror');
+          if (cmEl && cmEl.CodeMirror) {
+            cmEl.CodeMirror.setValue(codeToInsert);
+            return true;
+          }
+          return false;
+        },
+        args: [step.value]
+      });
+
+      if (injectRes && injectRes[0]?.result) {
+        console.log('[SQ] Successfully inserted solution into code editor via MAIN world script!');
+        step.status = 'done';
+        broadcastStepProgress();
+        broadcastStatus('acting', `✓ ${step.label}`);
+        await new Promise(r => setTimeout(r, 1200));
+        activeTask._isExecuting = false;
+        runStepQueue(targetTabId);
+        return;
+      }
+    } catch (err) {
+      console.warn('[SQ] MAIN world code injection failed, falling back to standard DOM execution:', err.message);
+    }
+  }
+
   // Build a mini action plan for this single step using DOM matching
   let actions = resolveStepToActions(step, elements);
 
@@ -2007,8 +2187,9 @@ function resolveStepToActions(step, elements) {
       if (score > bestScore) { bestScore = score; bestEl = el; }
     }
 
-    if (step.field.includes('subject') || step.field.includes('body') || step.field.includes('message')) {
-      // Route email subject and body to live dialog resolution in content.js
+    if (step.field.includes('subject') || step.field.includes('body') || step.field.includes('message') ||
+        step.field.includes('code') || step.field.includes('editor') || step.label?.toLowerCase().includes('solution') || step.label?.toLowerCase().includes('solve')) {
+      // Route email subject/body and code editors directly to semantic resolution in content.js
       actions.push({ step: 0, tag_id: 0, field: step.field, action: 'type', value: step.value, description: step.label });
     } else if (bestEl && bestScore >= 30) {
       actions.push({ step: 0, tag_id: bestEl.tag_id, field: step.field, action: 'type', value: step.value, description: step.label });
@@ -2047,6 +2228,12 @@ function resolveStepToActions(step, elements) {
                                 rawTarget.includes('first result') || rawTarget.includes('top video') ||
                                 rawTarget.includes('first video') || rawTarget.includes('first dataset');
     if (isSearchResultClick) {
+      return [{ step: 0, tag_id: 0, action: 'click', description: step.label || step.target }];
+    }
+
+    // Fast-path run/compile/execute buttons to content.js direct selector
+    const isRunClick = rawTarget.includes('run') || rawTarget.includes('compile') || rawTarget.includes('execute');
+    if (isRunClick) {
       return [{ step: 0, tag_id: 0, action: 'click', description: step.label || step.target }];
     }
 

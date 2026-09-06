@@ -549,30 +549,16 @@
     const monacoContainer = (element && element.closest && element.closest('.monaco-editor'))
                          || (element && element.classList && element.classList.contains('monaco-editor') ? element : null)
                          || document.querySelector('.monaco-editor');
-    if (monacoContainer && (window.location.hostname.includes('leetcode.com') || element.closest?.('.monaco-editor') || element.querySelector?.('.monaco-editor'))) {
-      console.log('[Content] Typing into Monaco Editor on', window.location.hostname);
+    if (monacoContainer && (window.location.hostname.includes('leetcode.com') || element.closest?.('.monaco-editor') || element.querySelector?.('.monaco-editor') || document.querySelector('.monaco-editor'))) {
+      console.log('[Content] Injecting code into Monaco Editor via background MAIN world script...');
       try {
-        const s = document.createElement('script');
-        s.textContent = `
-          try {
-            if (window.monaco && window.monaco.editor) {
-              const editors = window.monaco.editor.getEditors();
-              if (editors && editors.length > 0) {
-                editors[0].setValue(${JSON.stringify(text)});
-              }
-            }
-          } catch(e) {}
-        `;
-        (document.head || document.documentElement).appendChild(s);
-        s.remove();
-      } catch(e) {}
-
-      try {
-        const ta = monacoContainer.querySelector('textarea') || element;
-        ta.focus();
-        document.execCommand('selectAll', false, null);
-        document.execCommand('insertText', false, text);
-      } catch(e) {}
+        await chrome.runtime.sendMessage({
+          type: 'inject_code_to_main_world',
+          code: text
+        });
+      } catch(e) {
+        console.warn('[Content] Main world injection message failed:', e);
+      }
 
       await sleep(400);
       element.style.outline = prevOutline;
@@ -885,8 +871,8 @@
       }
     }
 
-    if (rawTarget.includes('code') || rawTarget.includes('editor')) {
-      const codeEditor = document.querySelector('.monaco-editor textarea, .monaco-editor, .ace_text-input, textarea.ace_text-input, .ace_content, div[role="textbox"], textarea');
+    if (rawTarget.includes('code') || rawTarget.includes('editor') || rawTarget.includes('solution') || rawTarget.includes('solve')) {
+      const codeEditor = document.querySelector('.monaco-editor, .monaco-editor textarea, .ace_editor, .ace_text-input, textarea.ace_text-input, .ace_content, div[role="textbox"], textarea');
       if (codeEditor) return codeEditor;
     }
 
@@ -1061,6 +1047,10 @@
 
     for (const el of candidates) {
       if (!isElementVisible(el, window.getComputedStyle(el))) continue;
+      if ((step.action === 'type' || step.type === 'type') &&
+          (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button' || el.getAttribute('role') === 'link')) {
+        continue;
+      }
       const text = (el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.value || '').toLowerCase();
       if (!text) continue;
 
