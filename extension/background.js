@@ -1685,126 +1685,143 @@ async function runStepQueue(tabId) {
   );
 
   if (isCodeTypeStep) {
-    console.log('[SQ] Inspecting live editor on page for step:', step.label);
-    broadcastStatus('acting', `Detecting code editor...`);
+    console.log('[SQ] Waiting for code editor to fully mount and initialize for step:', step.label);
+    broadcastStatus('thinking', `Waiting for code editor to mount...`);
 
-    // 1. Inspect live editor in MAIN world to extract active language and boilerplate template
+    // 1. Actively poll for Monaco/Ace/CodeMirror editor to mount and load its template (up to 20 attempts = 12s)
     let liveEditor = null;
-    try {
-      const inspectRes = await chrome.scripting.executeScript({
-        target: { tabId: targetTabId },
-        world: 'MAIN',
-        func: () => {
-          if (window.monaco && window.monaco.editor) {
-            const editors = window.monaco.editor.getEditors();
-            if (editors && editors.length > 0) {
-              const model = editors[0].getModel();
+    for (let attempt = 1; attempt <= 20; attempt++) {
+      try {
+        const inspectRes = await chrome.scripting.executeScript({
+          target: { tabId: targetTabId },
+          world: 'MAIN',
+          func: () => {
+            // Check Monaco Editor (LeetCode, etc.)
+            if (window.monaco && window.monaco.editor) {
+              const editors = window.monaco.editor.getEditors();
+              if (editors && editors.length > 0) {
+                const model = editors[0].getModel();
+                const val = editors[0].getValue() || '';
+                return {
+                  type: 'monaco',
+                  language: model ? model.getLanguageId() : 'cpp',
+                  template: val
+                };
+              }
+            }
+            // Check Ace Editor (Programiz, etc.)
+            const aceEl = document.querySelector('.ace_editor');
+            if (aceEl && aceEl.env && aceEl.env.editor) {
               return {
-                type: 'monaco',
-                language: model ? model.getLanguageId() : 'cpp',
-                template: editors[0].getValue()
+                type: 'ace',
+                language: 'python',
+                template: aceEl.env.editor.getValue() || ''
               };
             }
+            return null;
           }
-          const aceEl = document.querySelector('.ace_editor');
-          if (aceEl && aceEl.env && aceEl.env.editor) {
-            return {
-              type: 'ace',
-              language: 'python',
-              template: aceEl.env.editor.getValue()
-            };
-          }
-          return null;
-        }
-      });
-      if (inspectRes && inspectRes[0]?.result) {
-        liveEditor = inspectRes[0].result;
-      }
-    } catch (e) {
-      console.warn('[SQ] Live editor detection error:', e.message);
-    }
-
-    // 2. If live editor is active, dynamically synthesize the optimal solution using local LLM
-    if (liveEditor) {
-      const isLeetCode = activeTask.goal.toLowerCase().includes('leetcode') || (step.label || '').toLowerCase().includes('leetcode') || liveEditor.type === 'monaco';
-      const rawTopic = step.label.replace(/^Write solution for /i, '').replace(/^Write code for /i, '').replace(/^Write python code for /i, '').replace(/^Write cpp code for /i, '').trim();
-      const topic = rawTopic || activeTask.goal;
-      const lang = liveEditor.language || 'cpp';
-
-      broadcastStatus('thinking', `Synthesizing ${lang.toUpperCase()} solution with local LLM...`);
-      try {
-        const resp = await fetch('http://127.0.0.1:5000/api/generate_code', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            topic,
-            language: lang,
-            is_leetcode: isLeetCode,
-            template: liveEditor.template || ''
-          }),
-          signal: AbortSignal.timeout(15000)
         });
-        if (resp.ok) {
-          const json = await resp.json();
-          if (json?.code) {
-            step.value = json.code;
-            console.log(`[SQ] Local LLM generated ${json.code.length} chars of ${lang} code for ${topic}`);
-          }
+        if (inspectRes && inspectRes[0]?.result) {
+          liveEditor = inspectRes[0].result;
+          console.log(`[SQ] Code editor ready on attempt ${attempt}:`, liveEditor.type, liveEditor.language);
+          break;
         }
       } catch (e) {
-        console.warn('[SQ] Local LLM live code synthesis fallback:', e.message);
+        console.warn(`[SQ] Editor inspect attempt ${attempt} failed:`, e.message);
       }
+      broadcastStatus('thinking', `Waiting for code editor to load... (${attempt}/20)`);
+      await new Promise(r => setTimeout(r, 600));
     }
 
-    // 3. Inject code into live editor directly in MAIN world (bypassing CSP completely)
+    // 2. Synthesize the solution using pure local Ollama LLM intelligence
+    const isLeetCode = activeTask.goal.toLowerCase().includes('leetcode') || (step.label || '').toLowerCase().includes('leetcode') || (liveEditor && liveEditor.type === 'monaco');
+    const rawTopic = step.label.replace(/^Write solution for /i, '').replace(/^Write code for /i, '').replace(/^Write python code for /i, '').replace(/^Write cpp code for /i, '').trim();
+    const topic = rawTopic || activeTask.goal;
+    const lang = (liveEditor && liveEditor.language) || (isLeetCode ? 'cpp' : 'python');
+
+    broadcastStatus('thinking', `Synthesizing ${lang.toUpperCase()} solution with local LLM...`);
     try {
-      const injectRes = await chrome.scripting.executeScript({
-        target: { tabId: targetTabId },
-        world: 'MAIN',
-        func: (codeToInsert) => {
-          if (window.monaco && window.monaco.editor) {
-            const editors = window.monaco.editor.getEditors();
-            if (editors && editors.length > 0) {
-              editors[0].setValue(codeToInsert);
+      const resp = await fetch('http://127.0.0.1:5000/api/generate_code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic,
+          language: lang,
+          is_leetcode: isLeetCode,
+          template: (liveEditor && liveEditor.template) || ''
+        }),
+        signal: AbortSignal.timeout(25000)
+      });
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json?.code) {
+          step.value = json.code;
+          console.log(`[SQ] Local LLM generated ${json.code.length} chars of ${lang} code for ${topic}`);
+        }
+      }
+    } catch (e) {
+      console.warn('[SQ] Local LLM live code synthesis fallback:', e.message);
+    }
+
+    // 3. Inject code into live editor directly in MAIN world and verify
+    let injectedSuccessfully = false;
+    for (let setAttempt = 1; setAttempt <= 6; setAttempt++) {
+      try {
+        const injectRes = await chrome.scripting.executeScript({
+          target: { tabId: targetTabId },
+          world: 'MAIN',
+          func: (codeToInsert) => {
+            if (window.monaco && window.monaco.editor) {
+              const editors = window.monaco.editor.getEditors();
+              if (editors && editors.length > 0) {
+                editors[0].setValue(codeToInsert);
+                try {
+                  const ta = document.querySelector('.monaco-editor textarea');
+                  if (ta) ta.dispatchEvent(new Event('input', { bubbles: true }));
+                } catch(e) {}
+                const current = editors[0].getValue();
+                return current && current.length > 10;
+              }
+            }
+            const aceEl = document.querySelector('.ace_editor');
+            if (aceEl && aceEl.env && aceEl.env.editor) {
+              aceEl.env.editor.setValue(codeToInsert, 1);
+              return true;
+            } else if (window.ace) {
               try {
-                const ta = document.querySelector('.monaco-editor textarea');
-                if (ta) ta.dispatchEvent(new Event('input', { bubbles: true }));
+                const editor = window.ace.edit(aceEl || 'editor');
+                if (editor) { editor.setValue(codeToInsert, 1); return true; }
               } catch(e) {}
+            }
+            const cmEl = document.querySelector('.CodeMirror');
+            if (cmEl && cmEl.CodeMirror) {
+              cmEl.CodeMirror.setValue(codeToInsert);
               return true;
             }
-          }
-          const aceEl = document.querySelector('.ace_editor');
-          if (aceEl && aceEl.env && aceEl.env.editor) {
-            aceEl.env.editor.setValue(codeToInsert, 1);
-            return true;
-          } else if (window.ace) {
-            try {
-              const editor = window.ace.edit(aceEl || 'editor');
-              if (editor) { editor.setValue(codeToInsert, 1); return true; }
-            } catch(e) {}
-          }
-          const cmEl = document.querySelector('.CodeMirror');
-          if (cmEl && cmEl.CodeMirror) {
-            cmEl.CodeMirror.setValue(codeToInsert);
-            return true;
-          }
-          return false;
-        },
-        args: [step.value]
-      });
+            return false;
+          },
+          args: [step.value]
+        });
 
-      if (injectRes && injectRes[0]?.result) {
-        console.log('[SQ] Successfully inserted solution into code editor via MAIN world script!');
-        step.status = 'done';
-        broadcastStepProgress();
-        broadcastStatus('acting', `✓ ${step.label}`);
-        await new Promise(r => setTimeout(r, 1200));
-        activeTask._isExecuting = false;
-        runStepQueue(targetTabId);
-        return;
+        if (injectRes && injectRes[0]?.result) {
+          injectedSuccessfully = true;
+          console.log(`[SQ] Code successfully set and verified in editor on attempt ${setAttempt}!`);
+          break;
+        }
+      } catch (err) {
+        console.warn(`[SQ] Editor injection attempt ${setAttempt} failed:`, err.message);
       }
-    } catch (err) {
-      console.warn('[SQ] MAIN world code injection failed, falling back to standard DOM execution:', err.message);
+      await new Promise(r => setTimeout(r, 600));
+    }
+
+    if (injectedSuccessfully) {
+      step.status = 'done';
+      broadcastStepProgress();
+      broadcastStatus('acting', `✓ ${step.label}`);
+      await new Promise(r => setTimeout(r, 1500));
+      activeTask._isExecuting = false;
+      runStepQueue(targetTabId);
+      return;
     }
   }
 
