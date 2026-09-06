@@ -245,10 +245,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (window.monaco && window.monaco.editor) {
               const editors = window.monaco.editor.getEditors();
               if (editors && editors.length > 0) {
-                editors[0].setValue(codeToSet);
+                let didSet = false;
+                for (const ed of editors) {
+                  const val = ed.getValue() || '';
+                  const lang = ed.getModel()?.getLanguageId();
+                  if (val.includes('Solution') || val.includes('class') || val.includes('public:') || val.includes('def ') || (lang && lang !== 'plaintext')) {
+                    ed.setValue(codeToSet);
+                    didSet = true;
+                  }
+                }
+                if (!didSet) {
+                  for (const ed of editors) ed.setValue(codeToSet);
+                }
                 try {
-                  const ta = document.querySelector('.monaco-editor textarea');
-                  if (ta) ta.dispatchEvent(new Event('input', { bubbles: true }));
+                  document.querySelectorAll('.monaco-editor textarea').forEach(ta => ta.dispatchEvent(new Event('input', { bubbles: true })));
                 } catch(e) {}
                 return true;
               }
@@ -976,7 +986,7 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
           else if (/\b(?:java)\b/i.test(remainingQuery + ' ' + q)) lang = 'java';
           else if (/\b(?:javascript|js)\b/i.test(remainingQuery + ' ' + q)) lang = 'javascript';
           else if (matchedKnownSite.site === 'leetcode') {
-            lang = /\b(?:cpp|c\+\+)\b/i.test(q) ? 'cpp' : 'python';
+            lang = /\b(?:python|py)\b/i.test(q) ? 'python' : 'cpp';
           }
 
           let code = '';
@@ -984,8 +994,12 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
             const resp = await fetch('http://127.0.0.1:5000/api/generate_code', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ topic: cleanTerm, language: lang }),
-              signal: AbortSignal.timeout(8000)
+              body: JSON.stringify({
+                topic: cleanTerm,
+                language: lang,
+                is_leetcode: matchedKnownSite.site === 'leetcode'
+              }),
+              signal: AbortSignal.timeout(12000)
             });
             if (resp.ok) {
               const json = await resp.json();
@@ -994,7 +1008,11 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
           } catch (e) {}
 
           if (!code) {
-            code = `# Solution for ${cleanTerm}\ndef solution():\n    pass\n`;
+            if (matchedKnownSite.site === 'leetcode') {
+              code = `class Solution {\npublic:\n    // Solution for ${cleanTerm}\n};\n`;
+            } else {
+              code = `# Solution for ${cleanTerm}\ndef solution():\n    pass\n`;
+            }
           }
 
           steps.push({
@@ -1700,8 +1718,19 @@ async function runStepQueue(tabId) {
             if (window.monaco && window.monaco.editor) {
               const editors = window.monaco.editor.getEditors();
               if (editors && editors.length > 0) {
-                const model = editors[0].getModel();
-                const val = editors[0].getValue() || '';
+                let targetEd = editors.find(ed => {
+                  const v = ed.getValue() || '';
+                  return v.includes('Solution') || v.includes('class') || v.includes('def ') || v.includes('function');
+                });
+                if (!targetEd) {
+                  targetEd = editors.find(ed => {
+                    const l = ed.getModel()?.getLanguageId();
+                    return l && l !== 'plaintext';
+                  });
+                }
+                if (!targetEd) targetEd = editors[0];
+                const model = targetEd.getModel();
+                const val = targetEd.getValue() || '';
                 return {
                   type: 'monaco',
                   language: model ? model.getLanguageId() : 'cpp',
@@ -1774,15 +1803,42 @@ async function runStepQueue(tabId) {
             if (window.monaco && window.monaco.editor) {
               const editors = window.monaco.editor.getEditors();
               if (editors && editors.length > 0) {
-                editors[0].setValue(codeToInsert);
+                let didSet = false;
+                for (const ed of editors) {
+                  const val = ed.getValue() || '';
+                  const lang = ed.getModel()?.getLanguageId();
+                  if (val.includes('Solution') || val.includes('class') || val.includes('public:') || val.includes('def ') || (lang && lang !== 'plaintext')) {
+                    ed.setValue(codeToInsert);
+                    didSet = true;
+                  }
+                }
+                if (!didSet) {
+                  for (const ed of editors) ed.setValue(codeToInsert);
+                }
                 try {
-                  const ta = document.querySelector('.monaco-editor textarea');
-                  if (ta) ta.dispatchEvent(new Event('input', { bubbles: true }));
+                  document.querySelectorAll('.monaco-editor textarea').forEach(ta => ta.dispatchEvent(new Event('input', { bubbles: true })));
                 } catch(e) {}
-                const current = editors[0].getValue();
-                return current && current.length > 10;
+                return true;
               }
             }
+
+            // DOM-based fallback: dispatch paste and execCommand to Monaco's textarea
+            const monacoTextareas = document.querySelectorAll('.monaco-editor textarea');
+            if (monacoTextareas.length > 0) {
+              for (const ta of monacoTextareas) {
+                ta.focus();
+                ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', ctrlKey: true, bubbles: true }));
+                try {
+                  const dt = new DataTransfer();
+                  dt.setData('text/plain', codeToInsert);
+                  ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+                } catch(e) {}
+                document.execCommand('insertText', false, codeToInsert);
+                ta.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+              return true;
+            }
+
             const aceEl = document.querySelector('.ace_editor');
             if (aceEl && aceEl.env && aceEl.env.editor) {
               aceEl.env.editor.setValue(codeToInsert, 1);
@@ -1822,6 +1878,14 @@ async function runStepQueue(tabId) {
       activeTask._isExecuting = false;
       runStepQueue(targetTabId);
       return;
+    } else {
+      console.warn('[SQ] Could not confirm editor injection, retrying code step...');
+      step._retries = (step._retries || 0) + 1;
+      if (step._retries <= 4) {
+        activeTask._isExecuting = false;
+        setTimeout(() => runStepQueue(targetTabId), 1000);
+        return;
+      }
     }
   }
 
