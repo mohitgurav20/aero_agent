@@ -336,6 +336,8 @@ def generate_code():
     topic = str(data.get("topic") or data.get("prompt") or "").strip()
     language = str(data.get("language") or "python").strip().lower()
     is_leetcode = bool(data.get("is_leetcode")) or "leetcode" in str(data.get("site") or "").lower() or "leetcode" in topic.lower()
+    if is_leetcode and (language == "plaintext" or not language):
+        language = "cpp"
     template = str(data.get("template") or "").strip()
 
     error_feedback = str(data.get("error_feedback") or "").strip()
@@ -351,6 +353,16 @@ def generate_code():
         if template:
             prompt += f"Adhere strictly to this solution template and method signature:\n{template}\n\n"
 
+        if "cpp" in language or "c++" in language:
+            prompt += (
+                "CRITICAL C++ SYNTAX REQUIREMENTS:\n"
+                "- Write standard C++ code for LeetCode inside 'class Solution'.\n"
+                "- Use 'public:' visibility for solution methods.\n"
+                "- Use C++ types: 'vector<vector<char>>& board', 'vector<int>&', 'string', 'bool'.\n"
+                "- NEVER write Java syntax: NEVER use 'public boolean', 'char[][]', '.length', or 'null'.\n"
+                "- In C++, use 'board.size()', not 'board.length'. Use 'nullptr', not 'null'.\n\n"
+            )
+
         if "regular expression" in topic.lower():
             prompt += (
                 "Key 2D Dynamic Programming rules for regex matching:\n"
@@ -362,6 +374,15 @@ def generate_code():
                 "        dp[i][j] = dp[i][j-2];\n"
                 "        if (j > 1 && (p[j-2] == '.' || p[j-2] == s[i-1])) dp[i][j] = dp[i][j] || dp[i-1][j];\n"
                 "    }\n\n"
+            )
+        elif "sudoku" in topic.lower():
+            prompt += (
+                "Key backtracking rules for Sudoku Solver in C++:\n"
+                "- Solution class with method: void solveSudoku(vector<vector<char>>& board)\n"
+                "- Helper method: bool solve(vector<vector<char>>& board)\n"
+                "- Iterate through 9x9 board: if board[i][j] == '.' try char '1'..'9'\n"
+                "- Check validity across row, col, and 3x3 block using isValid(board, i, j, c)\n"
+                "- Backtrack if solve() returns false by resetting board[i][j] = '.'\n\n"
             )
         elif "median of two" in topic.lower():
             prompt += (
@@ -405,6 +426,20 @@ def generate_code():
         # LeetCode format guarantee: remove main() driver and ensure class Solution wrapping
         if is_leetcode or template or "leetcode" in topic.lower():
             code = re.sub(r"int\s+main\s*\([^)]*\)\s*\{[\s\S]*\}", "", code).strip()
+
+            if "cpp" in language or "c++" in language:
+                # Sanitize any accidental Java syntax outputted by the model
+                code = re.sub(r"\bpublic\s+boolean\b", "public:\n    bool", code)
+                code = re.sub(r"\bpublic\s+void\b", "public:\n    void", code)
+                code = re.sub(r"\bpublic\s+int\b", "public:\n    int", code)
+                code = re.sub(r"char\s*\[\s*\]\s*\[\s*\]", "vector<vector<char>>&", code)
+                code = re.sub(r"int\s*\[\s*\]\s*\[\s*\]", "vector<vector<int>>&", code)
+                code = re.sub(r"int\s*\[\s*\]", "vector<int>&", code)
+                code = re.sub(r"\.length\b", ".size()", code)
+                code = re.sub(r"\bnull\b", "nullptr", code)
+                code = re.sub(r"\bboolean\b", "bool", code)
+                if "vector" in code and "#include <vector>" not in code:
+                    code = "#include <vector>\nusing namespace std;\n\n" + code
             if "class Solution" not in code:
                 if "cpp" in language or "c++" in language:
                     includes = re.findall(r"^#include\s+.*", code, flags=re.MULTILINE)

@@ -895,6 +895,20 @@
     }
 
     if (rawTarget.includes('search result') || rawTarget.includes('top result') || rawTarget.includes('first result') || rawTarget.includes('first video') || rawTarget.includes('first item') || rawTarget.includes('first product') || rawTarget.includes('top findings')) {
+      // On LeetCode specifically, always select the genuine problem link (avoiding /problem-list/ cards)
+      if (window.location.hostname.includes('leetcode.com')) {
+        const leetProblemLink = document.querySelector('div[role="row"] a[href^="/problems/"], div[role="table"] a[href^="/problems/"], a[href^="/problems/"]:not([href*="solution"]):not([href*="discuss"]), a[href*="/problems/"]')
+          || Array.from(document.querySelectorAll('a[href*="/problems/"]')).find(a => !a.href.includes('/problem-list/'));
+        if (leetProblemLink) {
+          console.log('[Content] Matched LeetCode problem link:', leetProblemLink.href);
+          try {
+            leetProblemLink.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            leetProblemLink.style.outline = '3px solid #10b981';
+          } catch(e) {}
+          return leetProblemLink;
+        }
+      }
+
       const topLink = document.querySelector(
         '#search a:has(h3), .g a:has(h3), [data-sokoban-container] a:has(h3), a:has(h3), #rso a:has(h3), #rso a, div[data-component-type="s-search-result"] h2 a, .s-result-item h2 a, div[data-cy="title-recipe"] a, ytd-video-renderer a#thumbnail, ytd-video-renderer h3 a, ytd-rich-item-renderer a#thumbnail, [data-testid="results-list"] a, div[data-testid="results-list"] div[data-testid="search-result"] a, a[data-testid="search-result-title"], a.Link__StyledLink-sc-nb9098-0, div.search-title a, a.v-align-middle, div.f4.text-normal a, ul.repo-list li a, a[href*="/"][data-testid*="result"]'
       );

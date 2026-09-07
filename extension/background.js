@@ -945,7 +945,12 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
 
       let targetSearchUrl = null;
       if (matchedKnownSite.site === 'leetcode') {
-        targetSearchUrl = `https://leetcode.com/problemset/?search=${encodeURIComponent(cleanTerm)}`;
+        const cleanSlug = cleanTerm.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        if (cleanSlug && !['problems', 'problemset', 'all', 'home'].includes(cleanSlug)) {
+          targetSearchUrl = `https://leetcode.com/problems/${cleanSlug}/`;
+        } else {
+          targetSearchUrl = `https://leetcode.com/problemset/?search=${encodeURIComponent(cleanTerm)}`;
+        }
       } else if (matchedKnownSite.site === 'w3schools') {
         targetSearchUrl = `https://www.google.com/search?q=site%3Aw3schools.com+${encodeURIComponent(cleanTerm)}`;
       } else if (matchedKnownSite.site === 'kaggle') {
@@ -963,20 +968,23 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
       }
 
       if (targetSearchUrl) {
+        const isDirectProblem = targetSearchUrl.includes('leetcode.com/problems/');
         steps.push({
           type: 'navigate',
           url: targetSearchUrl,
-          label: `Search ${matchedKnownSite.site} for "${cleanTerm}"`,
+          label: isDirectProblem ? `Open LeetCode problem "${cleanTerm}"` : `Search ${matchedKnownSite.site} for "${cleanTerm}"`,
           _inspectAfter: true
         });
 
-        const hasClickIntent = /\b(?:click|open|select|tap|first|top|solve|slove)\b/i.test(remainingQuery);
-        if (hasClickIntent) {
-          steps.push({
-            type: 'click',
-            target: 'first search result',
-            label: `Click top ${cleanTerm} result`
-          });
+        if (!isDirectProblem) {
+          const hasClickIntent = /\b(?:click|open|select|tap|first|top|solve|slove)\b/i.test(remainingQuery);
+          if (hasClickIntent) {
+            steps.push({
+              type: 'click',
+              target: 'first search result',
+              label: `Click top ${cleanTerm} result`
+            });
+          }
         }
 
         const hasSolveIntent = /\b(?:solve|slove|solution|code|write)\b/i.test(remainingQuery);
@@ -1776,9 +1784,11 @@ async function runStepQueue(tabId) {
                 if (!targetEd) targetEd = editors[0];
                 const model = targetEd.getModel();
                 const val = targetEd.getValue() || '';
+                const rawLang = model ? model.getLanguageId() : null;
+                const finalLang = (rawLang && rawLang !== 'plaintext') ? rawLang : 'cpp';
                 return {
                   type: 'monaco',
-                  language: model ? model.getLanguageId() : 'cpp',
+                  language: finalLang,
                   template: val
                 };
               }
@@ -1811,7 +1821,8 @@ async function runStepQueue(tabId) {
     const isLeetCode = activeTask.goal.toLowerCase().includes('leetcode') || (step.label || '').toLowerCase().includes('leetcode') || (liveEditor && liveEditor.type === 'monaco');
     const rawTopic = step.label.replace(/^Write solution for /i, '').replace(/^Write code for /i, '').replace(/^Write python code for /i, '').replace(/^Write cpp code for /i, '').trim();
     const topic = rawTopic || activeTask.goal;
-    const lang = (liveEditor && liveEditor.language) || (isLeetCode ? 'cpp' : 'python');
+    const detectedLang = liveEditor && liveEditor.language && liveEditor.language !== 'plaintext' ? liveEditor.language : null;
+    const lang = detectedLang || (isLeetCode ? 'cpp' : 'python');
 
     broadcastStatus('thinking', `Synthesizing ${lang.toUpperCase()} solution with local LLM...`);
     try {
@@ -2050,7 +2061,7 @@ async function runStepQueue(tabId) {
 
             // Check for Compile / Runtime Error
             if (bodyText.includes('Compile Error') || bodyText.includes('Runtime Error')) {
-              const err = bodyText.match(/(?:Compile Error|Runtime Error)[\s\S]{1,200}/i)?.[0] || 'Execution Error';
+              const err = bodyText.match(/(?:Compile Error|Runtime Error)[\s\S]{1,400}/i)?.[0] || 'Execution Error';
               return { status: 'error', error: err };
             }
 
@@ -2079,14 +2090,18 @@ async function runStepQueue(tabId) {
       return;
     }
 
-    // 4. Handle Wrong Answer with Autonomous Self-Healing using local LLM
-    if (submissionResult && submissionResult.status === 'wrong_answer') {
-      const { passed, input, output, expected } = submissionResult;
-      console.warn(`[SQ] LeetCode Wrong Answer (${passed}). Failing testcase: ${input} => ${output} (expected ${expected})`);
-      broadcastStatus('thinking', `⚠️ Wrong Answer (${passed}). Self-healing failing testcase with local LLM...`);
+    // 4. Handle Wrong Answer or Compile/Runtime Error with Autonomous Self-Healing using local LLM
+    if (submissionResult && (submissionResult.status === 'wrong_answer' || submissionResult.status === 'error')) {
+      const isError = submissionResult.status === 'error';
+      const feedback = isError
+        ? `Previous submission failed on LeetCode with ${submissionResult.error}. Please fix all syntax and type errors and return clean, compilable standard C++ code using 'public:', 'vector<vector<char>>& board', etc.`
+        : `Failed with Wrong Answer (${submissionResult.passed}). Testcase: Input: ${submissionResult.input}, Output: ${submissionResult.output}, Expected: ${submissionResult.expected}. Please fix the algorithm so it returns ${submissionResult.expected}.`;
+
+      console.warn(`[SQ] LeetCode ${isError ? 'Error' : 'Wrong Answer'}. Triggering self-healing...`, feedback);
+      broadcastStatus('thinking', `⚠️ ${isError ? 'Compile/Runtime Error' : 'Wrong Answer'}. Self-healing code with local LLM...`);
 
       step._healingAttempts = (step._healingAttempts || 0) + 1;
-      if (step._healingAttempts <= 2) {
+      if (step._healingAttempts <= 3) {
         try {
           const resp = await fetch('http://127.0.0.1:5000/api/generate_code', {
             method: 'POST',
@@ -2095,7 +2110,7 @@ async function runStepQueue(tabId) {
               topic: activeTask.goal,
               language: 'cpp',
               is_leetcode: true,
-              error_feedback: `Failed with Wrong Answer (${passed}). Testcase: Input: ${input}, Output: ${output}, Expected: ${expected}. Please fix the algorithm so it returns ${expected}.`
+              error_feedback: feedback
             }),
             signal: AbortSignal.timeout(25000)
           });
@@ -2122,7 +2137,7 @@ async function runStepQueue(tabId) {
               });
 
               // Re-run submit_and_verify with the healed code
-              await new Promise(r => setTimeout(r, 1200));
+              await new Promise(r => setTimeout(r, 1500));
               activeTask._isExecuting = false;
               return runStepQueue(targetTabId);
             }
