@@ -347,61 +347,50 @@ def generate_code():
 
     if is_leetcode or template:
         prompt = (
-            f"You are an expert {language} competitive programmer solving a LeetCode problem: '{topic}'.\n"
-            f"Write ONLY the complete, optimal LeetCode class Solution in {language}.\n"
+            f"You are an expert competitive programmer and algorithms specialist.\n"
+            f"Task: Solve the LeetCode problem '{topic}' with maximum performance (optimal time and space complexity).\n"
+            f"Language: {language}.\n\n"
         )
         if template:
-            prompt += f"Adhere strictly to this solution template and method signature:\n{template}\n\n"
+            prompt += (
+                f"Official LeetCode Solution Template:\n{template}\n\n"
+                f"CRITICAL REQUIREMENT:\n"
+                f"Adhere strictly to the exact class and method signatures given in the template above. "
+                f"Do not rename the method or change the parameter/return types.\n\n"
+            )
 
         if "cpp" in language or "c++" in language:
             prompt += (
-                "CRITICAL C++ SYNTAX REQUIREMENTS:\n"
-                "- Write standard C++ code for LeetCode inside 'class Solution'.\n"
-                "- Use 'public:' visibility for solution methods.\n"
-                "- Use C++ types: 'vector<vector<char>>& board', 'vector<int>&', 'string', 'bool'.\n"
-                "- NEVER write Java syntax: NEVER use 'public boolean', 'char[][]', '.length', or 'null'.\n"
-                "- In C++, use 'board.size()', not 'board.length'. Use 'nullptr', not 'null'.\n\n"
+                "C++ COMPETITIVE PROGRAMMING RULES:\n"
+                "- Write standard C++17 code enclosed in 'class Solution'.\n"
+                "- Place solution methods under 'public:'.\n"
+                "- Use standard STL containers (#include <vector>, <string>, <unordered_map>, <unordered_set>, <queue>, <stack>, <algorithm>, <climits>).\n"
+                "- Do NOT use Java or Python syntax. Use .size(), nullptr, bool, true/false, vector<vector<...>>&.\n\n"
             )
-
-        if "regular expression" in topic.lower():
+        elif "python" in language:
             prompt += (
-                "Key 2D Dynamic Programming rules for regex matching:\n"
-                "- dp[m+1][n+1] initialized to false, dp[0][0] = true\n"
-                "- For j from 2 to n: if (p[j-1] == '*') dp[0][j] = dp[0][j-2];\n"
-                "- For i from 1 to m, j from 1 to n:\n"
-                "    if (p[j-1] == '.' || p[j-1] == s[i-1]) dp[i][j] = dp[i-1][j-1];\n"
-                "    else if (p[j-1] == '*') {\n"
-                "        dp[i][j] = dp[i][j-2];\n"
-                "        if (j > 1 && (p[j-2] == '.' || p[j-2] == s[i-1])) dp[i][j] = dp[i][j] || dp[i-1][j];\n"
-                "    }\n\n"
-            )
-        elif "sudoku" in topic.lower():
-            prompt += (
-                "Key backtracking rules for Sudoku Solver in C++:\n"
-                "- Solution class with method: void solveSudoku(vector<vector<char>>& board)\n"
-                "- Helper method: bool solve(vector<vector<char>>& board)\n"
-                "- Iterate through 9x9 board: if board[i][j] == '.' try char '1'..'9'\n"
-                "- Check validity across row, col, and 3x3 block using isValid(board, i, j, c)\n"
-                "- Backtrack if solve() returns false by resetting board[i][j] = '.'\n\n"
-            )
-        elif "median of two" in topic.lower():
-            prompt += (
-                "Key binary search rules for Median of Two Sorted Arrays:\n"
-                "- Binary search on partition of shorter array in O(log(min(m, n)))\n"
-                "- Ensure maxLeftX <= minRightY and maxLeftY <= minRightX\n\n"
-            )
-
-        if error_feedback:
-            prompt += (
-                f"Previous submission failed on LeetCode with:\n{error_feedback}\n"
-                "Analyze the exact failure and fix the edge cases so it returns the expected value.\n\n"
+                "PYTHON RULES:\n"
+                "- Write standard Python 3 code enclosed in 'class Solution:'.\n"
+                "- Use standard library modules if needed (collections, heapq, bisect, math).\n\n"
             )
 
         prompt += (
-            "Requirements:\n"
-            "1. Return ONLY pure compilable class Solution code.\n"
-            "2. Do NOT wrap in markdown backticks (no ```), do not include any conversational greeting or explanations.\n"
-            "3. Do NOT include main() or input reading. Implement the complete, optimal algorithm inside the method."
+            f"ALGORITHM REQUIREMENTS FOR '{topic.upper()}':\n"
+            "1. Deeply analyze the problem logic, constraints, and time/space complexity (e.g. Dynamic Programming, Monotonic Stack, Backtracking, Two Pointers, Graph DFS/BFS, Union Find, Trie, Binary Search, or Greedy).\n"
+            "2. Handle all edge cases cleanly (empty or 1-element inputs, boundary conditions, duplicates).\n"
+            "3. Ensure the solution runs well within standard LeetCode time limits (sub-50ms) and passes all testcases.\n\n"
+        )
+
+        if error_feedback:
+            prompt += (
+                f"PREVIOUS SUBMISSION FEEDBACK / ERROR:\n{error_feedback}\n\n"
+                f"Analyze why the previous code failed on this specific error or testcase, fix the root cause (base case, state transition, bounds, or syntax), and output the corrected complete Solution.\n\n"
+            )
+
+        prompt += (
+            "OUTPUT FORMAT:\n"
+            "Return ONLY the complete, compilable class Solution implementation.\n"
+            "Do NOT include markdown backticks (no ```), do not include conversational commentary, and do not include main() driver code."
         )
     else:
         prompt = (
@@ -453,33 +442,17 @@ def generate_code():
         return jsonify({"status": "success", "code": code})
     except Exception as e:
         log.warning("Ollama code generation failed: %s", e)
-        if is_leetcode and "cpp" in language:
-            fallback = (
-                "class Solution {\n"
-                "public:\n"
-                "    double findMedianSortedArrays(vector<int>& nums1, vector<int>& nums2) {\n"
-                "        vector<int> v = nums1;\n"
-                "        v.insert(v.end(), nums2.begin(), nums2.end());\n"
-                "        sort(v.begin(), v.end());\n"
-                "        int n = v.size();\n"
-                "        if (n % 2 == 1) return v[n / 2];\n"
-                "        return (v[n / 2 - 1] + v[n / 2]) / 2.0;\n"
-                "    }\n"
-                "};\n"
-            )
+        if is_leetcode:
+            if "cpp" in language or "c++" in language:
+                fallback = (
+                    f"// Fallback template for {topic}\n"
+                    f"#include <iostream>\n#include <vector>\nusing namespace std;\n\n"
+                    f"class Solution {{\npublic:\n    // Implement optimal solution for {topic}\n}};\n"
+                )
+            else:
+                fallback = f"# Solution for {topic}\nclass Solution:\n    pass\n"
         else:
-            fallback = (
-                "# Calculator Program\n"
-                "def add(a, b): return a + b\n"
-                "def subtract(a, b): return a - b\n"
-                "def multiply(a, b): return a * b\n"
-                "def divide(a, b): return a / b if b != 0 else 'Error: Division by zero'\n\n"
-                "print('--- Calculator Demo ---')\n"
-                "print('10 + 5 =', add(10, 5))\n"
-                "print('10 - 5 =', subtract(10, 5))\n"
-                "print('10 * 5 =', multiply(10, 5))\n"
-                "print('10 / 5 =', divide(10, 5))\n"
-            )
+            fallback = f"# Demonstration code for {topic}\ndef solve():\n    pass\n"
         return jsonify({"status": "fallback", "code": fallback})
 
 
