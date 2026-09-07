@@ -885,6 +885,15 @@
       if (runBtn) return runBtn;
     }
 
+    if (rawTarget.includes('submit')) {
+      const submitBtn = document.querySelector('button[data-e2e-locator="console-submit-button"], [data-e2e-locator*="submit"], button.bg-green-60, [data-cy="submit-code-btn"]')
+        || Array.from(document.querySelectorAll('button, div[role="button"], [role="button"]')).find(btn => {
+             const t = (btn.textContent || btn.innerText || '').trim().toLowerCase();
+             return t === 'submit' || t.startsWith('submit');
+           });
+      if (submitBtn) return submitBtn;
+    }
+
     if (rawTarget.includes('search result') || rawTarget.includes('top result') || rawTarget.includes('first result') || rawTarget.includes('first video') || rawTarget.includes('first item') || rawTarget.includes('first product') || rawTarget.includes('top findings')) {
       const topLink = document.querySelector(
         '#search a:has(h3), .g a:has(h3), [data-sokoban-container] a:has(h3), a:has(h3), #rso a:has(h3), #rso a, div[data-component-type="s-search-result"] h2 a, .s-result-item h2 a, div[data-cy="title-recipe"] a, ytd-video-renderer a#thumbnail, ytd-video-renderer h3 a, ytd-rich-item-renderer a#thumbnail, [data-testid="results-list"] a, div[data-testid="results-list"] div[data-testid="search-result"] a, a[data-testid="search-result-title"], a.Link__StyledLink-sc-nb9098-0, div.search-title a, a.v-align-middle, div.f4.text-normal a, ul.repo-list li a, a[href*="/"][data-testid*="result"]'

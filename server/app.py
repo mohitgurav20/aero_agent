@@ -338,16 +338,44 @@ def generate_code():
     is_leetcode = bool(data.get("is_leetcode")) or "leetcode" in str(data.get("site") or "").lower() or "leetcode" in topic.lower()
     template = str(data.get("template") or "").strip()
 
+    error_feedback = str(data.get("error_feedback") or "").strip()
+
     if not topic:
         topic = "calculator program"
 
     if is_leetcode or template:
         prompt = (
-            f"You are an expert {language} developer solving a LeetCode problem: '{topic}'.\n"
-            f"Write ONLY the complete LeetCode class Solution in {language}.\n"
+            f"You are an expert {language} competitive programmer solving a LeetCode problem: '{topic}'.\n"
+            f"Write ONLY the complete, optimal LeetCode class Solution in {language}.\n"
         )
         if template:
             prompt += f"Adhere strictly to this solution template and method signature:\n{template}\n\n"
+
+        if "regular expression" in topic.lower():
+            prompt += (
+                "Key 2D Dynamic Programming rules for regex matching:\n"
+                "- dp[m+1][n+1] initialized to false, dp[0][0] = true\n"
+                "- For j from 2 to n: if (p[j-1] == '*') dp[0][j] = dp[0][j-2];\n"
+                "- For i from 1 to m, j from 1 to n:\n"
+                "    if (p[j-1] == '.' || p[j-1] == s[i-1]) dp[i][j] = dp[i-1][j-1];\n"
+                "    else if (p[j-1] == '*') {\n"
+                "        dp[i][j] = dp[i][j-2];\n"
+                "        if (j > 1 && (p[j-2] == '.' || p[j-2] == s[i-1])) dp[i][j] = dp[i][j] || dp[i-1][j];\n"
+                "    }\n\n"
+            )
+        elif "median of two" in topic.lower():
+            prompt += (
+                "Key binary search rules for Median of Two Sorted Arrays:\n"
+                "- Binary search on partition of shorter array in O(log(min(m, n)))\n"
+                "- Ensure maxLeftX <= minRightY and maxLeftY <= minRightX\n\n"
+            )
+
+        if error_feedback:
+            prompt += (
+                f"Previous submission failed on LeetCode with:\n{error_feedback}\n"
+                "Analyze the exact failure and fix the edge cases so it returns the expected value.\n\n"
+            )
+
         prompt += (
             "Requirements:\n"
             "1. Return ONLY pure compilable class Solution code.\n"

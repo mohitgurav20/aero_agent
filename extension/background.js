@@ -1022,13 +1022,26 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
             label: `Write solution for ${cleanTerm}`
           });
 
-          const hasRunIntent = /\b(?:run|compile|execute|submit)\b/i.test(remainingQuery);
-          if (hasRunIntent) {
+          if (matchedKnownSite.site === 'leetcode') {
             steps.push({
               type: 'click',
               target: 'Run Compile Execute',
               label: 'Run code'
             });
+            steps.push({
+              type: 'submit_and_verify',
+              target: 'Submit',
+              label: 'Submit code and verify all testcases'
+            });
+          } else {
+            const hasRunIntent = /\b(?:run|compile|execute|submit)\b/i.test(remainingQuery);
+            if (hasRunIntent) {
+              steps.push({
+                type: 'click',
+                target: 'Run Compile Execute',
+                label: 'Run code'
+              });
+            }
           }
         }
 
@@ -1196,12 +1209,33 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
     }
   }
 
+  // ── 9.5. SUBMIT AND VERIFY TESTCASES WORKFLOW ─────────────────────────────
+  const isSubmitVerifyClause = /\b(?:submit|verify|check)\b.*\b(?:test|testcase|passed|result|accepted|submition|submission|all)\b|\b(?:submit\s+code|submit\s+solution)\b/i.test(remainingQuery || q);
+  if (isSubmitVerifyClause && !isSearchGoal && !isComposeGoal) {
+    steps.push({
+      type: 'submit_and_verify',
+      target: 'Submit',
+      label: 'Submit code and verify all testcases'
+    });
+    return { steps, context };
+  }
+
   // ── 10. GENERAL CLAUSE-BY-CLAUSE DECOMPOSITION ─────────────────────────────
   if (remainingQuery) {
     const clauses = remainingQuery.split(/\s+(?:and\s+then|then|after\s+that|and\s+also|also|and|,|;)\s+|\s+(?=(?:make|set|change|switch|turn|select|choose|click|press|tap|submit|create|save|fill|type|enter)\s+)/i);
     for (const c of clauses) {
       const clause = c.trim();
       if (!clause) continue;
+
+      if (/\b(?:submit|verify|check)\b/i.test(clause) && /\b(?:test|testcase|passed|result|accepted|all)\b/i.test(clause)) {
+        steps.push({ type: 'submit_and_verify', target: 'Submit', label: 'Submit code and verify all testcases' });
+        continue;
+      }
+
+      if (/\b(?:run|compile|execute)\b/i.test(clause) && !/\b(?:search|find|navigate)\b/i.test(clause)) {
+        steps.push({ type: 'click', target: 'Run Compile Execute', label: 'Run code' });
+        continue;
+      }
 
       const clickM = clause.match(/^(?:click|press|tap|hit|submit)\s+(.+)$/i);
       if (clickM) {
@@ -1268,6 +1302,7 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
     [/\byou\s*tube\b/gi, 'youtube'], [/\blinked\s+in\b/gi, 'linkedin'],
     [/\binsta\s*gram\b/gi, 'instagram'], [/\bchat\s*g\s*p\s*t\b/gi, 'chatgpt'],
     [/\blead\s*code\b/gi, 'leetcode'], [/\bleet\s*code\b/gi, 'leetcode'],
+    [/\bslove\b/gi, 'solve'], [/\bwhtt\b/gi, 'what'], [/\bcomplie\b/gi, 'compile'],
     [/\bcode\s*chef\b/gi, 'codechef'], [/\bhacker\s*rank\b/gi, 'hackerrank'],
     [/\bstack\s*overflow\b/gi, 'stackoverflow'], [/\bgeeks\s*for\s*geeks\b/gi, 'geeksforgeeks'],
   ];
@@ -1291,8 +1326,10 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
         }
       }
       if (combinedSteps.length > 0) {
-        // De-duplicate consecutive navigation steps to the same domain (e.g. 'Open gmail' followed by 'Open Gmail & Launch Compose')
+        // De-duplicate consecutive navigation steps and redundant run/submit steps
         const filteredSteps = [];
+        let hasRunCode = false;
+        let hasSubmitVerify = false;
         for (let i = 0; i < combinedSteps.length; i++) {
           const curr = combinedSteps[i];
           const next = combinedSteps[i + 1];
@@ -1304,6 +1341,14 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
                 continue; // Prefer the more specific second navigation
               }
             } catch(e) {}
+          }
+          if (curr.label === 'Run code' || curr.target === 'Run Compile Execute') {
+            if (hasRunCode) continue;
+            hasRunCode = true;
+          }
+          if (curr.type === 'submit_and_verify' || (curr.label || '').toLowerCase().includes('submit')) {
+            if (hasSubmitVerify) continue;
+            hasSubmitVerify = true;
           }
           filteredSteps.push(curr);
         }
@@ -1889,6 +1934,213 @@ async function runStepQueue(tabId) {
     }
   }
 
+  // ── RUN / COMPILE CODE DIRECT MAIN WORLD DISPATCH ─────────────────────────
+  const isRunStep = (step.type === 'click' && (step.target === 'Run Compile Execute' || (step.label || '').toLowerCase().includes('run code'))) || step.type === 'run_code';
+  if (isRunStep) {
+    console.log('[SQ] Executing Run / Compile Code step...');
+    broadcastStatus('acting', 'Running code on compiler...');
+    step.status = 'running';
+    broadcastStepProgress();
+
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: targetTabId },
+        world: 'MAIN',
+        func: () => {
+          const runBtn = document.querySelector('button[data-e2e-locator="console-run-button"], [data-e2e-locator*="run"], button[data-cypress="RunCode"], #run-btn, button.run, [data-testid*="run"], button[aria-label*="run" i]')
+            || Array.from(document.querySelectorAll('button, div[role="button"], [role="button"]')).find(b => {
+                 const t = (b.textContent || b.innerText || '').trim().toLowerCase();
+                 return t === 'run' || t.startsWith('run') || t.includes('compile') || t.includes('execute');
+               });
+          if (runBtn) {
+            runBtn.click();
+            return true;
+          }
+          return false;
+        }
+      });
+    } catch (e) {
+      console.warn('[SQ] Direct Run click error:', e.message);
+    }
+
+    // Give compiler time to execute testcases and display result
+    await new Promise(r => setTimeout(r, 4000));
+
+    step.status = 'done';
+    broadcastStepProgress();
+    broadcastStatus('acting', '✓ Run code completed');
+    await new Promise(r => setTimeout(r, 1000));
+    activeTask._isExecuting = false;
+    runStepQueue(targetTabId);
+    return;
+  }
+
+  // ── SUBMIT CODE AND VERIFY TESTCASES (LeetCode Autonomous Self-Healing Loop) ───
+  if (step.type === 'submit_and_verify') {
+    console.log('[SQ] Submitting solution and verifying testcases...');
+    broadcastStatus('acting', 'Submitting solution to LeetCode...');
+
+    step.status = 'running';
+    broadcastStepProgress();
+
+    // 1. Click the Submit button on LeetCode
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: targetTabId },
+        world: 'MAIN',
+        func: () => {
+          const submitBtn = document.querySelector('button[data-e2e-locator="console-submit-button"], [data-e2e-locator*="submit"], button.bg-green-60, [data-cy="submit-code-btn"]')
+            || Array.from(document.querySelectorAll('button, div[role="button"], [role="button"]')).find(b => {
+                 const t = (b.textContent || b.innerText || '').trim().toLowerCase();
+                 return t === 'submit' || t.startsWith('submit');
+               });
+          if (submitBtn) {
+            submitBtn.click();
+            return true;
+          }
+          return false;
+        }
+      });
+    } catch (e) {
+      console.warn('[SQ] Error clicking Submit button:', e.message);
+    }
+
+    // 2. Poll for submission result (up to 30 attempts = 24s)
+    let submissionResult = null;
+    for (let poll = 1; poll <= 30; poll++) {
+      await new Promise(r => setTimeout(r, 800));
+      broadcastStatus('thinking', `Verifying testcase results on LeetCode... (${poll}/30)`);
+      try {
+        const res = await chrome.scripting.executeScript({
+          target: { tabId: targetTabId },
+          world: 'MAIN',
+          func: () => {
+            const bodyText = document.body.innerText || '';
+
+            // Check for Accepted
+            const hasAccepted = (bodyText.includes('Accepted') && (
+              bodyText.includes('Runtime') ||
+              bodyText.includes('Beats') ||
+              bodyText.includes('testcases passed')
+            )) || document.querySelector('.text-green-s, [data-e2e-locator="submission-result"]') !== null;
+
+            if (hasAccepted) {
+              const rt = bodyText.match(/Runtime\s*[:\s]*(\d+\s*ms)/i)?.[0] || '';
+              const bt = bodyText.match(/Beats\s*[:\s]*([\d\.]+\s*%)/i)?.[0] || '';
+              return { status: 'accepted', details: `${rt} ${bt}`.trim() || 'All testcases passed' };
+            }
+
+            // Check for Wrong Answer
+            if (bodyText.includes('Wrong Answer')) {
+              const tc = bodyText.match(/(\d+\s*\/\s*\d+\s*testcases\s*passed)/i)?.[1] || '';
+              const inp = bodyText.match(/Input\s*([\s\S]*?)(?=Output)/i)?.[1]?.trim()
+                       || bodyText.match(/Input\s*[\n\r]+([^\n\r]+)/i)?.[1]?.trim() || '';
+              const out = bodyText.match(/Output\s*([\s\S]*?)(?=Expected)/i)?.[1]?.trim()
+                       || bodyText.match(/Output\s*[\n\r]+([^\n\r]+)/i)?.[1]?.trim() || '';
+              const exp = bodyText.match(/Expected\s*([\s\S]*?)(?=Code\s*\||Stdout|Compile|Runtime|\n\n\n|$)/i)?.[1]?.trim()?.split('\n')?.[0]?.trim()
+                       || bodyText.match(/Expected\s*[\n\r]+([^\n\r]+)/i)?.[1]?.trim() || '';
+              return {
+                status: 'wrong_answer',
+                passed: tc,
+                input: inp,
+                output: out,
+                expected: exp
+              };
+            }
+
+            // Check for Compile / Runtime Error
+            if (bodyText.includes('Compile Error') || bodyText.includes('Runtime Error')) {
+              const err = bodyText.match(/(?:Compile Error|Runtime Error)[\s\S]{1,200}/i)?.[0] || 'Execution Error';
+              return { status: 'error', error: err };
+            }
+
+            return null;
+          }
+        });
+
+        if (res && res[0]?.result) {
+          submissionResult = res[0].result;
+          console.log('[SQ] LeetCode submission result detected:', submissionResult);
+          break;
+        }
+      } catch (err) {
+        console.warn('[SQ] Poll submission result error:', err.message);
+      }
+    }
+
+    // 3. Handle Accepted
+    if (submissionResult && submissionResult.status === 'accepted') {
+      console.log('[SQ] LeetCode submission ACCEPTED!', submissionResult.details);
+      step.status = 'done';
+      broadcastStepProgress();
+      broadcastStatus('online', `✓ Accepted! All testcases passed! (${submissionResult.details})`);
+      activeTask._isExecuting = false;
+      activeTask.status = 'done';
+      return;
+    }
+
+    // 4. Handle Wrong Answer with Autonomous Self-Healing using local LLM
+    if (submissionResult && submissionResult.status === 'wrong_answer') {
+      const { passed, input, output, expected } = submissionResult;
+      console.warn(`[SQ] LeetCode Wrong Answer (${passed}). Failing testcase: ${input} => ${output} (expected ${expected})`);
+      broadcastStatus('thinking', `⚠️ Wrong Answer (${passed}). Self-healing failing testcase with local LLM...`);
+
+      step._healingAttempts = (step._healingAttempts || 0) + 1;
+      if (step._healingAttempts <= 2) {
+        try {
+          const resp = await fetch('http://127.0.0.1:5000/api/generate_code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              topic: activeTask.goal,
+              language: 'cpp',
+              is_leetcode: true,
+              error_feedback: `Failed with Wrong Answer (${passed}). Testcase: Input: ${input}, Output: ${output}, Expected: ${expected}. Please fix the algorithm so it returns ${expected}.`
+            }),
+            signal: AbortSignal.timeout(25000)
+          });
+
+          if (resp.ok) {
+            const json = await resp.json();
+            if (json?.code) {
+              console.log('[SQ] Self-healed code generated. Injecting into Monaco editor...');
+              await chrome.scripting.executeScript({
+                target: { tabId: targetTabId },
+                world: 'MAIN',
+                func: (codeToSet) => {
+                  if (window.monaco && window.monaco.editor) {
+                    const editors = window.monaco.editor.getEditors();
+                    for (const ed of editors) {
+                      const v = ed.getValue() || '';
+                      if (v.includes('Solution') || v.includes('class') || ed.getModel()?.getLanguageId() !== 'plaintext') {
+                        ed.setValue(codeToSet);
+                      }
+                    }
+                  }
+                },
+                args: [json.code]
+              });
+
+              // Re-run submit_and_verify with the healed code
+              await new Promise(r => setTimeout(r, 1200));
+              activeTask._isExecuting = false;
+              return runStepQueue(targetTabId);
+            }
+          }
+        } catch (healErr) {
+          console.warn('[SQ] Self-healing code generation error:', healErr.message);
+        }
+      }
+    }
+
+    step.status = 'done';
+    broadcastStepProgress();
+    broadcastStatus('online', submissionResult?.status === 'accepted' ? '✓ Accepted! All testcases passed' : `✓ Submission completed (${submissionResult?.passed || 'reviewed'})`);
+    activeTask._isExecuting = false;
+    activeTask.status = 'done';
+    return;
+  }
+
   // Build a mini action plan for this single step using DOM matching
   let actions = resolveStepToActions(step, elements);
 
@@ -2315,6 +2567,12 @@ function resolveStepToActions(step, elements) {
     // Fast-path run/compile/execute buttons to content.js direct selector
     const isRunClick = rawTarget.includes('run') || rawTarget.includes('compile') || rawTarget.includes('execute');
     if (isRunClick) {
+      return [{ step: 0, tag_id: 0, action: 'click', description: step.label || step.target }];
+    }
+
+    // Fast-path submit buttons to content.js direct selector
+    const isSubmitClick = rawTarget.includes('submit');
+    if (isSubmitClick) {
       return [{ step: 0, tag_id: 0, action: 'click', description: step.label || step.target }];
     }
 
