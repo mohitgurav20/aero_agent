@@ -924,23 +924,27 @@ def decompose_goal():
     goal_lower = goal.lower()
     if "chess" in goal_lower and ("play" in goal_lower or "game" in goal_lower or "move" in goal_lower):
         chess_steps = []
-        is_already_on_computer = "chess.com/play/computer" in current_url
-        is_on_home = "chess.com/home" in current_url or (current_url.endswith("chess.com") or current_url.endswith("chess.com/"))
+        is_computer = "chess.com/play/computer" in current_url
+        is_play_menu = "/play" in current_url and not is_computer
+        is_home = "chess.com/home" in current_url or current_url.endswith("chess.com") or current_url.endswith("chess.com/")
 
-        if not is_already_on_computer and not is_on_home:
-            chess_steps.append({"type": "navigate", "url": "https://www.chess.com/play/computer", "label": "Open Chess vs Computer"})
+        if is_play_menu or is_home:
+            chess_steps.append({"type": "click", "target": "Play Bots", "label": "Click Play Bots to open bot match"})
+            chess_steps.append({"type": "wait", "value": 2000, "label": "Wait for bot selection to load"})
             chess_steps.append({"type": "click", "target": "Play Choose Start Game", "label": "Start chess match against bot"})
-        elif is_on_home:
-            chess_steps.append({"type": "click", "target": "Play Bots Start Game", "label": "Start chess match / Play Bots"})
+        elif is_computer:
+            chess_steps.append({"type": "click", "target": "Play Choose Start Game", "label": "Start chess match against bot"})
         else:
+            chess_steps.append({"type": "navigate", "url": "https://www.chess.com/play/computer", "label": "Open Chess vs Computer"})
+            chess_steps.append({"type": "wait", "value": 2000, "label": "Wait for chess page to load"})
             chess_steps.append({"type": "click", "target": "Play Choose Start Game", "label": "Start chess match against bot"})
 
         chess_steps.extend([
-            {"type": "wait", "value": 2000, "label": "Wait for chess board to initialize"},
+            {"type": "wait", "value": 2500, "label": "Wait for live chess board to initialize"},
             {"type": "chess_move", "from": "e2", "to": "e4", "move": "e4", "label": "Play opening move: King's Pawn to e4 with LLM intelligence"},
-            {"type": "wait", "value": 2000, "label": "Wait for opponent move"},
+            {"type": "wait", "value": 2500, "label": "Wait for opponent move"},
             {"type": "chess_move", "from": "g1", "to": "f3", "move": "Nf3", "label": "Develop Knight to f3 with LLM intelligence"},
-            {"type": "wait", "value": 2000, "label": "Wait for opponent move"},
+            {"type": "wait", "value": 2500, "label": "Wait for opponent move"},
             {"type": "chess_move", "from": "f1", "to": "c4", "move": "Bc4", "label": "Develop Bishop to c4 (Italian Game) with LLM intelligence"}
         ])
         return jsonify({"status": "success", "steps": chess_steps, "source": "domain-planner"})
