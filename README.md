@@ -1,4 +1,4 @@
-# SIH26171 — On-device Visual Perception for Light-weight Browser Agents
+# gear — Next-Era Browser AI Agent
 
 > **Track:** Software · **Sponsor:** ISRO · **Team:** 4 members · **Window:** 6 days · **Phases:** 162 tasks
 
@@ -127,3 +127,4 @@ ollama pull moondream:latest
 ## License
 
 Internal SIH project — not for public distribution.
+
