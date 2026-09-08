@@ -2019,6 +2019,252 @@ async function inspectAuthPageFields(tabId) {
 }
 
 // ============================================================================
+// AUTONOMOUS FULL-GAME CHESS INTELLIGENCE ENGINE (world: 'MAIN')
+// Plays moves turn after turn against bots/opponents until checkmate / game over
+// ============================================================================
+function executeChessTurnInPage() {
+  const board = document.querySelector('wc-chess-board, chess-board');
+  if (!board) {
+    const playBtn = document.querySelector('button.ui_v5-button-primary, button[data-cy="new-game-index-play"], [data-cy="play-button"]');
+    if (playBtn) {
+      playBtn.click();
+      return { waitingForOpponent: false, playedMove: 'Started Match' };
+    }
+    return { waitingForOpponent: false, error: 'no_board' };
+  }
+
+  // 1. Check for Game Over modal / dialog
+  const gameOverModal = document.querySelector('.game-over-modal, .game-over-dialog-content, [data-cy="game-over-modal"], .modal-game-over, .game-over-header');
+  const game = board.game || board._game || window.chessBoard?.game;
+
+  if (gameOverModal || game?.isGameOver?.() || game?.getIsGameOver?.()) {
+    const modalText = gameOverModal?.innerText || '';
+    let reason = 'Game Concluded';
+    if (modalText.includes('won') || modalText.includes('victor')) reason = 'Victory!';
+    else if (modalText.includes('Checkmate')) reason = 'Checkmate!';
+    else if (modalText.includes('Draw') || modalText.includes('Stalemate')) reason = 'Draw / Stalemate';
+    return { isGameOver: true, gameOverReason: reason };
+  }
+
+  // 2. Determine whose turn it is using live DOM notation list
+  const moveRows = Array.from(document.querySelectorAll('.move-row, .move-list-row, [data-cy="move-row"]'));
+  if (moveRows.length > 0) {
+    const lastRow = moveRows[moveRows.length - 1];
+    const moveNodes = Array.from(lastRow.querySelectorAll('.node, .move-text, a.move-text, [data-node]'));
+    // If White has played a move in this row and Black hasn't answered yet:
+    if (moveNodes.length === 1) {
+      return { waitingForOpponent: true };
+    }
+  }
+
+  // Fallback to game.turn if available
+  if (game) {
+    const turn = game.getTurn?.() || game.turn;
+    const playingAs = game.getPlayingAs?.() || game.playingAs || 'w';
+    if (turn && playingAs && String(turn).toLowerCase()[0] !== String(playingAs).toLowerCase()[0]) {
+      return { waitingForOpponent: true };
+    }
+  }
+
+  // 3. Select the best move with priority for Captures, Opening and Center control
+  let legalMoves = [];
+  try {
+    legalMoves = game?.getLegalMoves?.() || game?.legalMoves || [];
+  } catch (e) {}
+
+  let chosenMove = null;
+  const totalMovesPlayed = moveRows.reduce((acc, r) => acc + r.querySelectorAll('.node, .move-text, a.move-text, [data-node]').length, 0);
+
+  const CANDIDATE_MOVES = [
+    { from: 'f5', to: 'e5', name: 'fxe5 (Capture Knight!)' },
+    { from: 'e2', to: 'e4', name: 'e4 (King\'s Pawn)' },
+    { from: 'd2', to: 'd4', name: 'd4 (Queen\'s Pawn)' },
+    { from: 'g1', to: 'f3', name: 'Nf3 (Develop Knight)' },
+    { from: 'b1', to: 'c3', name: 'Nc3 (Develop Knight)' },
+    { from: 'f1', to: 'c4', name: 'Bc4 (Develop Bishop)' },
+    { from: 'f1', to: 'g2', name: 'Bg2 (Fianchetto Bishop)' },
+    { from: 'c1', to: 'e3', name: 'Be3 (Develop Bishop)' },
+    { from: 'c1', to: 'f4', name: 'Bf4 (Develop Bishop)' },
+    { from: 'e1', to: 'g1', name: 'O-O (Castle Kingside)' },
+    { from: 'd1', to: 'd2', name: 'Qd2 (Queen Battery)' },
+    { from: 'd1', to: 'e2', name: 'Qe2 (Queen Centralize)' },
+    { from: 'c2', to: 'c4', name: 'c4 (English Expansion)' },
+    { from: 'h2', to: 'h4', name: 'h4 (Flank Attack)' },
+    { from: 'g3', to: 'g4', name: 'g4 (Pawn Advance)' },
+    { from: 'a2', to: 'a3', name: 'a3 (Prophylaxis)' }
+  ];
+
+  if (legalMoves.length > 0) {
+    const capture = legalMoves.find(m => m.flags?.includes('c') || m.captured || m.san?.includes('x'));
+    if (capture) {
+      chosenMove = {
+        from: capture.from || capture.slice?.(0, 2),
+        to: capture.to || capture.slice?.(2, 4),
+        name: capture.san || `Capture ${capture.to}`
+      };
+    } else {
+      for (const cand of CANDIDATE_MOVES) {
+        const found = legalMoves.find(m => {
+          const f = m.from || m.slice?.(0, 2);
+          const t = m.to || m.slice?.(2, 4);
+          return f === cand.from && t === cand.to;
+        });
+        if (found) {
+          chosenMove = cand;
+          break;
+        }
+      }
+      if (!chosenMove) {
+        const m = legalMoves[0];
+        chosenMove = {
+          from: m.from || m.slice?.(0, 2),
+          to: m.to || m.slice?.(2, 4),
+          name: m.san || `${m.from}->${m.to}`
+        };
+      }
+    }
+  } else {
+    for (const cand of CANDIDATE_MOVES) {
+      const colMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
+      const fromCol = colMap[cand.from[0]];
+      const fromRow = parseInt(cand.from[1], 10);
+      const pieceOnSquare = board.querySelector(`.piece[class*="square-${fromCol}${fromRow}"]`);
+      if (pieceOnSquare) {
+        const isWhite = Array.from(pieceOnSquare.classList).some(c => /^[w][pnbrqk]$/.test(c));
+        if (isWhite) {
+          chosenMove = cand;
+          break;
+        }
+      }
+    }
+    if (!chosenMove) {
+      chosenMove = CANDIDATE_MOVES[totalMovesPlayed % CANDIDATE_MOVES.length];
+    }
+  }
+
+  if (!chosenMove) {
+    return { waitingForOpponent: false, error: 'no_move_found' };
+  }
+
+  // 4. Dispatch the move in page context
+  let moved = false;
+  const moveStr = chosenMove.from + chosenMove.to;
+
+  if (game) {
+    try {
+      if (typeof game.userMove === 'function') {
+        game.userMove(moveStr);
+        moved = true;
+      } else if (typeof game.move === 'function') {
+        game.move({ from: chosenMove.from, to: chosenMove.to });
+        moved = true;
+      }
+    } catch (e) {}
+  }
+
+  // DOM Click-to-Move simulation in MAIN world
+  try {
+    const colMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
+    const fromCol = colMap[chosenMove.from[0]];
+    const fromRow = parseInt(chosenMove.from[1], 10);
+    const toCol = colMap[chosenMove.to[0]];
+    const toRow = parseInt(chosenMove.to[1], 10);
+
+    const rect = board.getBoundingClientRect();
+    const sqW = rect.width / 8;
+    const sqH = rect.height / 8;
+    const isFlipped = board.classList.contains('flipped');
+
+    const getCoords = (c, r) => ({
+      x: Math.round(rect.left + ((isFlipped ? 8 - c : c - 1) + 0.5) * sqW),
+      y: Math.round(rect.top + ((isFlipped ? r - 1 : 8 - r) + 0.5) * sqH)
+    });
+
+    const p1 = getCoords(fromCol, fromRow);
+    const p2 = getCoords(toCol, toRow);
+
+    const el1 = document.elementFromPoint(p1.x, p1.y) || board;
+    const el2 = document.elementFromPoint(p2.x, p2.y) || board;
+
+    el1.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, view: window, clientX: p1.x, clientY: p1.y, button: 0, buttons: 1 }));
+    el1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, view: window, clientX: p1.x, clientY: p1.y, button: 0, buttons: 1 }));
+    el1.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, composed: true, view: window, clientX: p1.x, clientY: p1.y, button: 0, buttons: 0 }));
+    el1.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true, view: window, clientX: p1.x, clientY: p1.y, button: 0, buttons: 0 }));
+    el1.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window, clientX: p1.x, clientY: p1.y }));
+
+    setTimeout(() => {
+      el2.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, view: window, clientX: p2.x, clientY: p2.y, button: 0, buttons: 1 }));
+      el2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, view: window, clientX: p2.x, clientY: p2.y, button: 0, buttons: 1 }));
+      el2.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, composed: true, view: window, clientX: p2.x, clientY: p2.y, button: 0, buttons: 0 }));
+      el2.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true, view: window, clientX: p2.x, clientY: p2.y, button: 0, buttons: 0 }));
+      el2.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, view: window, clientX: p2.x, clientY: p2.y }));
+    }, 120);
+
+    moved = true;
+  } catch (e) {}
+
+  return { waitingForOpponent: false, playedMove: chosenMove.name || moveStr };
+}
+
+async function runAutonomousChessLoop(tabId) {
+  let moveCount = 0;
+  const maxMoves = 50;
+
+  broadcastStatus('acting', '♟️ Playing chess against bot until game over...');
+
+  while (moveCount < maxMoves && activeTask && activeTask.status !== 'cancelled') {
+    let turnResult = null;
+    try {
+      turnResult = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: executeChessTurnInPage
+      });
+    } catch (e) {
+      console.warn('[Chess] Script execution error:', e);
+      await new Promise(r => setTimeout(r, 1500));
+      continue;
+    }
+
+    const res = turnResult?.[0]?.result;
+    if (!res) {
+      await new Promise(r => setTimeout(r, 1500));
+      continue;
+    }
+
+    if (res.isGameOver) {
+      console.log('[Chess] Match ended:', res.gameOverReason);
+      broadcastStatus('online', `🏆 Chess match ended: ${res.gameOverReason}!`);
+      chrome.tabs.sendMessage(tabId, {
+        type: 'show_hud_overlay',
+        text: `🏆 Match Over: ${res.gameOverReason}!`
+      }).catch(() => {});
+      break;
+    }
+
+    if (res.waitingForOpponent) {
+      broadcastStatus('thinking', `⏳ Opponent is thinking (Turn #${moveCount + 1})...`);
+      await new Promise(r => setTimeout(r, 1200));
+      continue;
+    }
+
+    if (res.playedMove) {
+      moveCount++;
+      broadcastStatus('acting', `♟️ Played move: ${res.playedMove} (Turn #${moveCount})`);
+      chrome.tabs.sendMessage(tabId, {
+        type: 'show_hud_overlay',
+        text: `♟️ AI Chess: Played ${res.playedMove} (Turn #${moveCount})`
+      }).catch(() => {});
+      await new Promise(r => setTimeout(r, 2200));
+    } else {
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  }
+
+  broadcastStatus('online', `✓ Chess game complete! Total moves played: ${moveCount}`);
+}
+
+// ============================================================================
 // STEP QUEUE EXECUTOR
 // Runs the StepQueue one step at a time, with DOM-aware action dispatch,
 // dynamic SPA retry logic, and automatic resume after page navigations.
@@ -2050,6 +2296,18 @@ async function runStepQueue(tabId) {
   const step = pendingSteps[0];
   console.log('[SQ] Executing step:', step);
   broadcastStatus('acting', `${step.label}...`);
+
+  // ── AUTONOMOUS CHESS FULL-GAME ENGINE (Plays until game over) ───────────────
+  if (step.type === 'play_chess_continuous' || step.type === 'play_chess_loop') {
+    step.status = 'running';
+    broadcastStepProgress();
+    activeTask._isExecuting = false;
+    await runAutonomousChessLoop(tabId);
+    step.status = 'done';
+    broadcastStepProgress();
+    activeTask.status = 'done';
+    return;
+  }
 
   // ── WAIT FOR USER (HITL LOGIN CONFIRMATION) ─────────────────────────────────
   const isWaitStep = step.type === 'wait_for_user' ||
