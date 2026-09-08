@@ -2897,6 +2897,9 @@ async function runStepQueue(tabId) {
       action: step.type,
       value: step.value || null,
       key: step.key || null,
+      from: step.from || null,
+      to: step.to || null,
+      move: step.move || null,
       description: step.label
     }];
   }
@@ -3349,6 +3352,30 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 // ============================================================================
 function resolveStepToActions(step, elements) {
   const actions = [];
+
+  // Dedicated chess move action
+  if (step.type === 'chess_move') {
+    return [{
+      step: 0,
+      tag_id: 0,
+      action: 'chess_move',
+      from: step.from || 'e2',
+      to: step.to || 'e4',
+      move: step.move || 'e4',
+      description: step.label || `Play chess move ${step.move || ''}`
+    }];
+  }
+
+  // Dedicated wait action
+  if (step.type === 'wait') {
+    return [{
+      step: 0,
+      tag_id: 0,
+      action: 'wait',
+      value: step.value || 1500,
+      description: step.label || 'Wait'
+    }];
+  }
 
   const isInputEl = (el) =>
     el.tag === 'input' || el.tag === 'textarea' || el.role === 'textbox' || el.role === 'searchbox';

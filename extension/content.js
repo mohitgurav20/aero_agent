@@ -730,9 +730,93 @@
     }
 
     await sleep(200);
-    clickableParent.style.outline = prevOutline;
-    clickableParent.style.transition = prevTransition;
+    try {
+      clickableParent.style.outline = prevOutline;
+      clickableParent.style.transition = prevTransition;
+    } catch (e) { }
     removeTargetReticle();
+  }
+
+  /**
+   * Autonomous Chess & Board Game Move Executor
+   * Simulates pointer/mouse interactions across modern web chessboards (Chess.com, Lichess, etc.)
+   */
+  async function executeChessMove(fromSq, toSq, moveName) {
+    if (!fromSq || !toSq) return false;
+    const colMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
+    const fromCol = colMap[fromSq[0].toLowerCase()] || 5;
+    const fromRow = parseInt(fromSq[1], 10) || 2;
+    const toCol = colMap[toSq[0].toLowerCase()] || 5;
+    const toRow = parseInt(toSq[1], 10) || 4;
+
+    const boardEl = document.querySelector('chess-board, wc-chess-board, #board-single, .board, #board-layout-main, div.main-board, div.board-container');
+    const fromClass = `.square-${fromCol}${fromRow}`;
+    const toClass = `.square-${toCol}${toRow}`;
+
+    // 1. Attempt coordinate-calibrated board interaction
+    if (boardEl) {
+      try {
+        boardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (e) {}
+      await sleep(200);
+
+      const rect = boardEl.getBoundingClientRect();
+      const sqW = rect.width / 8;
+      const sqH = rect.height / 8;
+
+      const isFlipped = boardEl.classList.contains('flipped') || document.querySelector('.board.flipped') !== null;
+      const getCoords = (col, row) => {
+        const c = isFlipped ? (8 - col) : (col - 1);
+        const r = isFlipped ? (row - 1) : (8 - row);
+        return {
+          x: Math.round(rect.left + (c + 0.5) * sqW),
+          y: Math.round(rect.top + (r + 0.5) * sqH)
+        };
+      };
+
+      const fromCoord = getCoords(fromCol, fromRow);
+      const toCoord = getCoords(toCol, toRow);
+
+      const dispatchClick = (x, y) => {
+        const el = document.elementFromPoint(x, y) || boardEl;
+        const opts = {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          view: window,
+          clientX: x,
+          clientY: y,
+          button: 0,
+          buttons: 1
+        };
+        el.dispatchEvent(new PointerEvent('pointerdown', opts));
+        el.dispatchEvent(new MouseEvent('mousedown', opts));
+        el.dispatchEvent(new PointerEvent('pointerup', opts));
+        el.dispatchEvent(new MouseEvent('mouseup', opts));
+        el.dispatchEvent(new MouseEvent('click', opts));
+      };
+
+      console.log(`[Chess] Clicking source square: ${fromSq} at (${fromCoord.x}, ${fromCoord.y})`);
+      dispatchClick(fromCoord.x, fromCoord.y);
+      await sleep(250);
+
+      console.log(`[Chess] Clicking destination square: ${toSq} at (${toCoord.x}, ${toCoord.y})`);
+      dispatchClick(toCoord.x, toCoord.y);
+      await sleep(250);
+      return true;
+    }
+
+    // 2. DOM Piece & Square Class Fallback
+    const fromEl = document.querySelector(`.piece${fromClass}, ${fromClass}, [data-square="${fromSq}"]`);
+    const toEl = document.querySelector(`${toClass}, [data-square="${toSq}"]`);
+    if (fromEl && toEl) {
+      await simulateClick(fromEl);
+      await sleep(250);
+      await simulateClick(toEl);
+      return true;
+    }
+
+    return false;
   }
 
   async function simulateType(element, text) {
@@ -1300,6 +1384,21 @@
       }
     }
 
+    // Dedicated Chess.com & Online Games Play / Start Match handler
+    if (rawTarget.includes('start game') || rawTarget.includes('play online') || rawTarget.includes('play bots') ||
+        rawTarget.includes('play chess') || rawTarget.includes('start chess') || rawTarget.includes('choose start game') ||
+        rawTarget.includes('play choose') || rawTarget.includes('play match') || rawTarget.includes('play bots start game')) {
+      const chessPlayBtn = Array.from(document.querySelectorAll('button, a, div[role="button"]')).find(el => {
+        const t = (el.textContent || el.innerText || el.getAttribute('aria-label') || '').toLowerCase().trim();
+        return t === 'start game' || t === 'play' || t === 'play bots' || t === 'play online' || t === 'choose' ||
+               t.startsWith('start game') || t.includes('play bots') || t.includes('start game');
+      }) || document.querySelector('button[data-cy="new-game-index-play"], a[href*="/play/computer"], a[href*="/play/online"], .ui_v5-button-primary, button.play-quick-links-button, [data-cy="play-button"]');
+      if (chessPlayBtn) {
+        console.log('[Content] Matched Chess play button:', chessPlayBtn);
+        return chessPlayBtn;
+      }
+    }
+
     const candidates = Array.from(document.querySelectorAll('button, a, input, select, textarea, [role="button"], [role="link"], div[onclick], span[onclick], iframe, [tabindex]'));
     let best = null;
     let bestScore = 0;
@@ -1545,6 +1644,18 @@
             await sleep(step.value || 1000);
             result.success = true;
             break;
+
+          case 'chess_move': {
+            const fromSq = step.from || 'e2';
+            const toSq = step.to || 'e4';
+            const moveName = step.move || `${fromSq}-${toSq}`;
+            console.log(`[Content] Executing autonomous chess move: ${moveName} (${fromSq} -> ${toSq})`);
+            showHudOverlay(`♟️ AI Playing Move: ${moveName} (${fromSq.toUpperCase()} ➔ ${toSq.toUpperCase()})`);
+            const moved = await executeChessMove(fromSq, toSq, moveName);
+            result.success = moved;
+            result.page_changed = true;
+            break;
+          }
 
           default:
             throw new Error(`Unsupported action type: ${step.action}`);
