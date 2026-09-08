@@ -1031,7 +1031,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Render sent-confirmation toast (email goes into Gmail compose directly, no duplicate preview)
   function renderArtifactCard(payload) {
-    if (!payload) return;
+    if (!payload || payload.artifactType !== 'email') return;
+    const goalLower = (payload.goal || '').toLowerCase();
+    if (goalLower.includes('whatsapp') || goalLower.includes('telegram') || goalLower.includes('slack') || goalLower.includes('discord')) return;
     const card = document.getElementById('generated-artifact-card');
     if (!card) return;
 
@@ -1356,6 +1358,10 @@ document.addEventListener('DOMContentLoaded', () => {
     planStepsList.innerHTML = '';
     planStepsContainer.style.display = 'none';
     planMeta.style.display = 'none';
+    if (artifactCard) {
+      artifactCard.style.display = 'none';
+      artifactCard.style.opacity = '0';
+    }
 
     reasoningBox.innerHTML = `<strong>Planning:</strong> Analyzing active page DOM elements for "${escapeHtml(originalGoal)}"...`;
     updateStatus('thinking', 'Planning actions for command...');

@@ -852,7 +852,10 @@ def decompose_goal():
         "   - Navigate: https://web.whatsapp.com/ for WhatsApp, https://web.telegram.org/ for Telegram.\n"
         "   - Search contact: click and type recipient's name into 'Search or start new chat'.\n"
         "   - Select contact: click recipient contact name in results/chat list.\n"
-        "   - Compose message: type into 'Type a message' box. Dynamically compose an articulate, thoughtful message matching the requested tone (e.g. formal evening message, greeting, update).\n"
+        "   - Compose message: type into 'Type a message' box.\n"
+        "     * HUMAN-BRAINED NATURAL TONE MANDATE: Compose genuine, authentic, natural human messages (1-2 sentences max). Write like a real person messaging a friend/family member/colleague, NOT like a corporate robot or Hallmark greeting card.\n"
+        "     * CONTEXT & DETAIL SENSITIVITY: Deeply honor all specific details in the user request (e.g. duration 'for 2 weeks', specific recipient relationship like 'didi' = sister -> warm, respectful tone, e.g. 'Hi Didi, wishing you a wonderful two-week holiday! Hope you have a restful break!').\n"
+        "     * ZERO DUPLICATION: Never repeat sentences or phrases. Exactly one crisp message.\n"
         "   - Send: press_key 'Enter' or click send button.\n"
         "2. LeetCode / Coding Tasks:\n"
         "   - Clean entity: extract the pure problem title (e.g. 'Course Schedule', 'Two Sum', 'LRU Cache', 'Valid Parentheses', 'Trapping Rain Water'). "
@@ -878,13 +881,22 @@ def decompose_goal():
         '      * {"type": "wait_for_user", "label": "Please sign in to your account, then click Continue"}\n'
         "12. X (Twitter): https://x.com/ or https://x.com/login for login, https://x.com/search?q=<query> for search\n\n"
         "Examples:\n"
+        'Goal: "send an holiday message to didi for 2 weeks"\n'
+        "JSON:\n"
+        "[\n"
+        '  {"type": "navigate", "url": "https://web.whatsapp.com/", "label": "Open WhatsApp Web"},\n'
+        '  {"type": "type", "field": "Search or start a new chat", "value": "didi", "label": "Search for \'didi\'"},\n'
+        '  {"type": "click", "target": "didi", "label": "Open chat with didi"},\n'
+        '  {"type": "type", "field": "Type a message", "value": "Hi Didi, wishing you a wonderful two-week holiday! Hope you have a restful and enjoyable time.", "label": "Type holiday message"},\n'
+        '  {"type": "press_key", "key": "Enter", "label": "Send message"}\n'
+        "]\n\n"
         'Goal: "open whatsapp and message suresh a formal evening message"\n'
         "JSON:\n"
         "[\n"
         '  {"type": "navigate", "url": "https://web.whatsapp.com/", "label": "Open WhatsApp Web"},\n'
         '  {"type": "type", "field": "Search or start a new chat", "value": "suresh", "label": "Search for \'suresh\'"},\n'
         '  {"type": "click", "target": "suresh", "label": "Open chat with suresh"},\n'
-        '  {"type": "type", "field": "Type a message", "value": "Good evening Suresh, I hope you are having a productive and pleasant evening.", "label": "Type formal evening message"},\n'
+        '  {"type": "type", "field": "Type a message", "value": "Good evening Suresh, hope you had a productive day and have a pleasant evening.", "label": "Type formal evening message"},\n'
         '  {"type": "press_key", "key": "Enter", "label": "Send message"}\n'
         "]\n\n"
         'Goal: "open x website and login and search for open ai"\n'
@@ -928,20 +940,41 @@ def decompose_goal():
             if m:
                 steps = json.loads(m.group(0))
                 if isinstance(steps, list) and len(steps) > 0:
+                    def _dedupe_val(val):
+                        if not val or not isinstance(val, str):
+                            return val
+                        t = val.strip()
+                        for n in (4, 3, 2):
+                            if len(t) % n == 0:
+                                part_len = len(t) // n
+                                part = t[:part_len]
+                                if part * n == t:
+                                    return part.strip()
+                        return val
+
                     valid_steps = []
                     for s in steps:
                         if isinstance(s, dict) and "type" in s:
+                            val = _dedupe_val(s.get("value"))
+                            lbl = s.get("label") or f"{s.get('type')} {s.get('target') or s.get('url') or s.get('field') or ''}".strip()
+                            # If search step entity was truncated by LLM (e.g. "di" instead of "didi")
+                            if s.get("type") == "type" and ("search" in (s.get("field") or "").lower() or "search" in lbl.lower()):
+                                m_ent = re.search(r"search\s+(?:for\s+)?['\"]?([^'\"]+)['\"]?", lbl, re.I)
+                                if m_ent:
+                                    ent = m_ent.group(1).strip()
+                                    if ent and (not val or len(val) < len(ent)):
+                                        val = ent
                             valid_steps.append({
                                 "type": s.get("type", "click"),
                                 "url": s.get("url"),
                                 "target": s.get("target"),
                                 "field": s.get("field"),
-                                "value": s.get("value"),
+                                "value": val,
                                 "key": s.get("key"),
                                 "topic": s.get("topic"),
                                 "language": s.get("language"),
                                 "direction": s.get("direction"),
-                                "label": s.get("label") or f"{s.get('type')} {s.get('target') or s.get('url') or s.get('field') or ''}".strip()
+                                "label": lbl
                             })
 
                     # Human-In-The-Loop: When login/sign in is detected without explicit credentials in prompt,

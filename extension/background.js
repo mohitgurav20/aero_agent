@@ -1810,8 +1810,11 @@ async function runAutonomousReActLoop(tabId, goal, initialHistory = []) {
         const res = await chrome.tabs.sendMessage(targetTabId, { type: 'execute_actions', payload: plan });
         if (res?.status === 'completed' && (!res.results || res.results.every(r => r.success !== false))) {
           success = true;
-          // Capture and broadcast email artifact to side panel if body was typed
-          if ((action.action === 'type' || action.type === 'type') && (action.description?.toLowerCase().includes('body') || action.description?.toLowerCase().includes('message') || (action.value && action.value.length > 60))) {
+          // Capture and broadcast email artifact to side panel ONLY if genuinely an email task
+          const rGoalLower = (goal || '').toLowerCase();
+          const isReActChat = rGoalLower.includes('whatsapp') || rGoalLower.includes('telegram') || rGoalLower.includes('slack');
+          const isReActEmail = (rGoalLower.includes('email') || rGoalLower.includes('gmail') || rGoalLower.includes('mail')) && !isReActChat;
+          if (isReActEmail && (action.action === 'type' || action.type === 'type') && (action.description?.toLowerCase().includes('body') || action.description?.toLowerCase().includes('email') || (action.value && action.value.length > 60))) {
             chrome.runtime.sendMessage({
               type: 'artifact_generated',
               payload: {
@@ -3008,8 +3011,12 @@ async function runStepQueue(tabId) {
     broadcastStepProgress();
     broadcastStatus('acting', `✓ ${step.label}`);
 
-    // Broadcast generated email / artifact to side panel & history so it never vanishes
-    if (step.type === 'type' && (step.field?.includes('body') || step.field?.includes('message'))) {
+    // Broadcast generated email / artifact to side panel ONLY for genuine email tasks (never for WhatsApp or chat apps)
+    const activeGoalStr = (activeTask.goal || '').toLowerCase();
+    const isChatApp = activeGoalStr.includes('whatsapp') || activeGoalStr.includes('telegram') || activeGoalStr.includes('slack') || activeGoalStr.includes('discord') || activeGoalStr.includes('twitter') || activeGoalStr.includes('instagram');
+    const isEmailTask = (activeGoalStr.includes('email') || activeGoalStr.includes('gmail') || activeGoalStr.includes('mail') || (targetTab?.url && (targetTab.url.includes('mail.google.com') || targetTab.url.includes('outlook')))) && !isChatApp;
+
+    if (isEmailTask && step.type === 'type' && (step.field?.includes('body') || step.field?.includes('email') || step.field?.includes('message'))) {
       const recipientStep = activeTask.steps.find(s => s.field?.includes('recipient') || s.field?.includes('to'));
       const subjectStep = activeTask.steps.find(s => s.field?.includes('subject'));
       chrome.runtime.sendMessage({

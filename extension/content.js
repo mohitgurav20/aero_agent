@@ -844,41 +844,83 @@
         return;
       }
     } else if (element.isContentEditable || element.getAttribute('contenteditable') === 'true' || element.getAttribute('role') === 'textbox' || element.closest('[contenteditable="true"]')) {
-      // For WhatsApp Web, Gmail, Outlook compose body which uses contenteditable divs
+      // For WhatsApp Web (Lexical editor), Gmail, Outlook compose body which uses contenteditable divs
       const targetEditable = element.isContentEditable ? element : (element.closest('[contenteditable="true"]') || element);
       targetEditable.focus();
       if (typeof targetEditable.click === 'function') {
         try { targetEditable.click(); } catch (e) { }
       }
 
-      // 1. Try native execCommand first (crucial for Lexical/Draft.js on WhatsApp Web & LinkedIn to enable Send button)
-      let execSuccess = false;
+      // Deduplicate consecutive repeated text if LLM or prompt repeated sentences
+      const dedupeConsecutive = (str) => {
+        if (!str || typeof str !== 'string') return str;
+        const trimmed = str.trim();
+        for (let parts = 4; parts >= 2; parts--) {
+          if (trimmed.length % parts === 0) {
+            const partLen = trimmed.length / parts;
+            const sub = trimmed.substring(0, partLen);
+            if (sub.repeat(parts) === trimmed) {
+              return sub.trim();
+            }
+          }
+        }
+        return str;
+      };
+      const cleanText = dedupeConsecutive(text);
+
+      // Select and clear any previous draft text
       try {
-        document.execCommand('selectAll', false, null);
-        execSuccess = document.execCommand('insertText', false, text);
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(targetEditable);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand('delete', false, null);
       } catch (e) { }
 
-      // 2. If text not set, fallback to HTML / innerText assignment
-      if (!execSuccess || !targetEditable.innerText || targetEditable.innerText.trim().length === 0) {
-        const lines = text.split(/\r?\n/);
-        const htmlContent = lines.map(line => {
-          const safe = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-          return safe ? `<div>${safe}</div>` : `<div><br></div>`;
-        }).join('');
-        targetEditable.innerHTML = htmlContent;
-        if (!targetEditable.innerText || targetEditable.innerText.trim().length === 0) {
-          targetEditable.innerText = text;
+      // 1. Try native execCommand first (crucial for WhatsApp Web Lexical & Draft.js to update internal model)
+      try {
+        document.execCommand('insertText', false, cleanText);
+      } catch (e) { }
+
+      // 2. Verify whether text was inserted into editor
+      const probe = cleanText.trim().slice(0, 15);
+      const isAlreadyInserted = probe && (targetEditable.innerText || targetEditable.textContent || '').includes(probe);
+
+      // 3. Fallback ONLY if execCommand failed to insert text
+      if (!isAlreadyInserted) {
+        let pasteSuccess = false;
+        try {
+          const dt = new DataTransfer();
+          dt.setData('text/plain', cleanText);
+          const pasteEvt = new ClipboardEvent('paste', {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: dt
+          });
+          targetEditable.dispatchEvent(pasteEvt);
+          pasteSuccess = (targetEditable.innerText || targetEditable.textContent || '').includes(probe);
+        } catch (e) { }
+
+        if (!pasteSuccess) {
+          const lines = cleanText.split(/\r?\n/);
+          const htmlContent = lines.map(line => {
+            const safe = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return safe ? `<div>${safe}</div>` : `<div><br></div>`;
+          }).join('');
+          targetEditable.innerHTML = htmlContent;
+          if (!targetEditable.innerText || targetEditable.innerText.trim().length === 0) {
+            targetEditable.innerText = cleanText;
+          }
         }
       }
 
-      // 3. Dispatch comprehensive input events so draft engines & React commit the text
-      try {
-        targetEditable.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: text, inputType: 'insertText' }));
-      } catch (e) { }
-      targetEditable.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: text, inputType: 'insertText' }));
+      // 4. Notify React / Lexical / Vue state observers of the input change
+      // CRITICAL: DO NOT dispatch InputEvent with { data: text, inputType: 'insertText' }!
+      // Lexical's native listener will capture it and insert a duplicate copy of the text!
       targetEditable.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
       targetEditable.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-      // Keep focused, DO NOT blur (blur resets Gmail Closure editor state)
+      // Keep focused, DO NOT blur (blur resets editor state)
     }
 
     await sleep(200);
