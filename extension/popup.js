@@ -257,22 +257,70 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // HITL Submit Credentials Form Handler
+  // HITL Submit Dynamic Credentials Form Handler (Option 2)
   if (hitlSubmitCredsBtn) {
     hitlSubmitCredsBtn.addEventListener('click', () => {
-      const username = (hitlUsernameInput?.value || '').trim();
-      const password = (hitlPasswordInput?.value || '').trim();
-      if (!username && !password) return;
+      const dynamicContainer = document.getElementById('hitl-dynamic-fields-container');
+      const inputs = dynamicContainer ? dynamicContainer.querySelectorAll('.hitl-dynamic-input') : [];
+
+      const fieldsPayload = [];
+      let usernameFallback = '';
+      let passwordFallback = '';
+
+      if (inputs.length > 0) {
+        inputs.forEach(inp => {
+          const val = (inp.value || '').trim();
+          if (val) {
+            fieldsPayload.push({
+              key: inp.dataset.key,
+              name: inp.dataset.name,
+              id: inp.dataset.id,
+              type: inp.dataset.type,
+              selector: inp.dataset.selector,
+              value: val
+            });
+            if (inp.dataset.type === 'password' || inp.type === 'password') {
+              passwordFallback = val;
+            } else if (!usernameFallback) {
+              usernameFallback = val;
+            }
+          }
+        });
+      } else {
+        const uVal = (hitlUsernameInput?.value || '').trim();
+        const pVal = (hitlPasswordInput?.value || '').trim();
+        if (uVal) usernameFallback = uVal;
+        if (pVal) passwordFallback = pVal;
+      }
+
+      if (fieldsPayload.length === 0 && !usernameFallback && !passwordFallback) {
+        const firstInp = dynamicContainer?.querySelector('input');
+        if (firstInp) {
+          firstInp.style.borderColor = '#ef4444';
+          firstInp.focus();
+        }
+        return;
+      }
 
       const hitlBadge = document.getElementById('hitl-badge');
       if (hitlBadge) hitlBadge.style.display = 'none';
       switchTab('actions');
-      updateStatus('acting', 'Entering credentials securely...');
+      updateStatus('acting', 'Entering credentials securely with agent...');
       speakAgentMessage('Entering credentials and continuing task');
+
       chrome.runtime.sendMessage({
         type: 'fill_and_submit_credentials',
-        payload: { username, password }
+        payload: {
+          fields: fieldsPayload,
+          username: usernameFallback,
+          password: passwordFallback
+        }
       });
+
+      // Clear password fields for safety
+      if (dynamicContainer) {
+        dynamicContainer.querySelectorAll('input[type="password"]').forEach(p => p.value = '');
+      }
       if (hitlPasswordInput) hitlPasswordInput.value = '';
     });
   }
@@ -833,7 +881,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const bannerTitle = document.getElementById('hitl-banner-title');
         if (bannerTitle && message.payload?.title) bannerTitle.textContent = message.payload.title;
         const bannerSub = document.getElementById('hitl-banner-sub');
-        if (bannerSub) bannerSub.textContent = 'Paused: Sign in or select an SSO option to continue';
+        if (bannerSub) bannerSub.textContent = 'Choose Option 1 (Manual in browser) or Option 2 (Auto-login)';
+
+        const siteName = message.payload?.siteName || 'this website';
+        const agentOptTitle = document.getElementById('hitl-agent-opt-title');
+        if (agentOptTitle) agentOptTitle.textContent = `Let Agent Sign You In on ${siteName}`;
+        const agentOptDesc = document.getElementById('hitl-agent-opt-desc');
+        if (agentOptDesc) {
+          const count = message.payload?.fields?.length || 2;
+          agentOptDesc.textContent = `Detected ${count} field(s) on ${siteName}. Enter details below for the agent to auto-login.`;
+        }
 
         // Also display the inline HITL card directly on the Actions tab!
         const inlineHitlEl = document.getElementById('inline-hitl-card');
@@ -843,7 +900,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (inlineDescEl && message.payload?.message) inlineDescEl.textContent = message.payload.message;
         }
 
-        // Render any SSO buttons detected on the page
+        // Render detected SSO buttons for Option 1
         if (hitlSsoContainer && hitlSsoButtons) {
           if (message.payload?.ssoButtons && message.payload.ssoButtons.length > 0) {
             hitlSsoButtons.innerHTML = '';
@@ -851,7 +908,7 @@ document.addEventListener('DOMContentLoaded', () => {
               const chip = document.createElement('button');
               chip.className = 'clarify-sso-chip';
               chip.setAttribute('data-sso', ssoText);
-              chip.style.cssText = 'padding: 6px 11px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid #fed7aa; background: #fff; cursor: pointer; color: #9a3412; transition: all 0.15s ease;';
+              chip.style.cssText = 'padding: 5px 10px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid #fed7aa; background: #fff; cursor: pointer; color: #9a3412; transition: all 0.15s ease;';
               chip.textContent = ssoText;
               hitlSsoButtons.appendChild(chip);
             });
@@ -859,8 +916,51 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
 
+        // Dynamically render the exact form fields requested by this website (Option 2)
+        const dynamicContainer = document.getElementById('hitl-dynamic-fields-container');
+        if (dynamicContainer) {
+          const fields = message.payload?.fields || [
+            { key: 'username', name: 'username', label: 'Username or Email', type: 'text', placeholder: 'Enter username or email' },
+            { key: 'password', name: 'password', label: 'Password', type: 'password', placeholder: 'Enter password' }
+          ];
+
+          dynamicContainer.innerHTML = '';
+          fields.forEach((f, idx) => {
+            const group = document.createElement('div');
+            group.className = 'hitl-dynamic-field-group';
+            group.style.cssText = 'display: flex; flex-direction: column; gap: 3px;';
+
+            const label = document.createElement('label');
+            label.style.cssText = 'font-size: 10.5px; font-weight: 600; color: #475569;';
+            label.textContent = f.label || (f.type === 'password' ? 'Password' : `Field ${idx + 1}`);
+
+            const input = document.createElement('input');
+            input.className = 'hitl-dynamic-input';
+            input.type = f.type || (f.name?.toLowerCase().includes('pass') ? 'password' : 'text');
+            input.placeholder = f.placeholder || `Enter ${label.textContent.toLowerCase()}...`;
+            input.dataset.key = f.key || f.name || `field_${idx}`;
+            input.dataset.name = f.name || '';
+            input.dataset.id = f.id || '';
+            input.dataset.type = f.type || 'text';
+            input.dataset.selector = f.selector || '';
+            input.style.cssText = 'width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1.5px solid #e2e8f0; border-radius: 7px; font-size: 11.5px; transition: border 0.15s ease;';
+
+            input.addEventListener('focus', () => {
+              input.style.borderColor = '#f59e0b';
+              input.style.outline = 'none';
+            });
+            input.addEventListener('blur', () => {
+              input.style.borderColor = '#e2e8f0';
+            });
+
+            group.appendChild(label);
+            group.appendChild(input);
+            dynamicContainer.appendChild(group);
+          });
+        }
+
         switchTab('hitl');
-        speakAgentMessage(message.payload?.title || 'Authentication required. Please sign in to continue.');
+        speakAgentMessage(message.payload?.title || `Authentication required on ${siteName}`);
         break;
 
       case 'speech_live_transcript':

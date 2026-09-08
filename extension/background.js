@@ -411,7 +411,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     case 'fill_and_submit_credentials': {
-      const { username, password } = message.payload || {};
+      const payload = message.payload || {};
       chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
         const tab = tabs?.[0];
         if (!tab?.id) return;
@@ -419,42 +419,108 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         broadcastStatus('acting', 'Entering credentials securely...');
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
-          func: (u, p) => {
-            const userInp = document.querySelector('input[autocomplete="username"], input[name="text"], input[name="username"], input[type="email"], input[name="email"], input[type="text"]');
-            if (userInp && u) {
-              userInp.focus();
-              userInp.value = u;
-              userInp.dispatchEvent(new Event('input', { bubbles: true }));
-              userInp.dispatchEvent(new Event('change', { bubbles: true }));
+          func: (data) => {
+            const { fields, username, password } = data || {};
+            let filledAny = false;
+
+            function triggerEvents(el, val) {
+              el.focus();
+              el.value = val;
+              el.dispatchEvent(new Event('focus', { bubbles: true }));
+              el.dispatchEvent(new Event('keydown', { bubbles: true, key: val.slice(-1) }));
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+              el.dispatchEvent(new Event('keyup', { bubbles: true, key: val.slice(-1) }));
+              el.dispatchEvent(new Event('blur', { bubbles: true }));
             }
-            const passInp = document.querySelector('input[type="password"], input[name="password"]');
-            if (passInp && p) {
-              passInp.focus();
-              passInp.value = p;
-              passInp.dispatchEvent(new Event('input', { bubbles: true }));
-              passInp.dispatchEvent(new Event('change', { bubbles: true }));
+
+            // Structured dynamic fields matching this specific site
+            if (Array.isArray(fields) && fields.length > 0) {
+              fields.forEach(f => {
+                if (!f.value) return;
+                let targetEl = null;
+                if (f.selector) {
+                  try { targetEl = document.querySelector(f.selector); } catch(e) {}
+                }
+                if (!targetEl && f.id) targetEl = document.getElementById(f.id);
+                if (!targetEl && f.name) targetEl = document.querySelector(`input[name="${f.name}"]`);
+                if (!targetEl && f.type === 'password') targetEl = document.querySelector('input[type="password"]');
+                if (!targetEl && (f.type === 'email' || f.type === 'text')) {
+                  targetEl = document.querySelector('input[type="email"], input[type="text"]:not([type="password"])');
+                }
+
+                if (targetEl) {
+                  triggerEvents(targetEl, f.value);
+                  filledAny = true;
+                }
+              });
+            } else {
+              const userInp = document.querySelector('input[autocomplete="username"], input[name="text"], input[name="username"], input[type="email"], input[name="email"], input[type="text"]:not([type="password"])');
+              if (userInp && username) {
+                triggerEvents(userInp, username);
+                filledAny = true;
+              }
+              const passInp = document.querySelector('input[type="password"], input[name="password"]');
+              if (passInp && password) {
+                triggerEvents(passInp, password);
+                filledAny = true;
+              }
             }
+
+            // Click primary submit / continue button
             const submitBtn = document.querySelector('button[type="submit"], input[type="submit"]') ||
-              Array.from(document.querySelectorAll('button, div[role="button"]')).find(b => {
+              Array.from(document.querySelectorAll('button, div[role="button"], a[role="button"]')).find(b => {
                 const t = (b.textContent || b.innerText || '').trim().toLowerCase();
-                return t === 'next' || t === 'log in' || t === 'sign in' || t === 'continue';
+                return t === 'next' || t === 'log in' || t === 'sign in' || t === 'continue' || t === 'submit' || t === 'login' || t === 'proceed';
               });
             if (submitBtn) {
+              submitBtn.focus();
               submitBtn.click();
-              return true;
+              return { success: true, filledAny, clickedSubmit: true };
             }
-            return false;
+            return { success: true, filledAny, clickedSubmit: false };
           },
-          args: [username, password]
+          args: [payload]
         }).catch(() => {});
 
-        await new Promise(r => setTimeout(r, 2000));
+        // Wait 2.2s for navigation / DOM reaction
+        await new Promise(r => setTimeout(r, 2200));
+
+        // Re-inspect page to check if Step 2 (e.g. Password or OTP) appeared
+        const followUpAuth = await inspectAuthPageFields(tab.id);
+        const stillAuth = followUpAuth?.isAuth || followUpAuth?.hasOtpOr2Fa;
+
+        if (stillAuth && activeTask && !activeTask._userHasSignedIn) {
+          console.log('[SQ] Follow-up auth step detected (e.g. Password or OTP)! Prompting user for next step...');
+          const siteName = followUpAuth?.siteName || 'this website';
+          const pauseMsg = followUpAuth.hasOtpOr2Fa
+            ? '2FA / Verification code required. Enter code or verify in browser.'
+            : `Next step on ${siteName}: Please enter required details or complete sign-in.`;
+
+          broadcastStatus('waiting_user_input', pauseMsg);
+          chrome.runtime.sendMessage({
+            type: 'require_user_input',
+            payload: {
+              reason: followUpAuth.hasOtpOr2Fa ? 'otp_2fa' : 'login_credentials',
+              title: followUpAuth.hasOtpOr2Fa ? '2FA Verification Required' : `Sign-in Step on ${siteName}`,
+              siteName: siteName,
+              message: pauseMsg,
+              url: followUpAuth.url,
+              fields: followUpAuth.fields,
+              ssoButtons: followUpAuth.ssoButtons
+            }
+          }).catch(() => {});
+          return;
+        }
+
+        // Login completed!
         if (activeTask) {
           activeTask._userHasSignedIn = true;
           activeTask.status = 'running';
           const pausedStep = activeTask.steps?.find(s => s.status === 'paused');
-          if (pausedStep) pausedStep.status = 'pending';
+          if (pausedStep) pausedStep.status = 'done';
           broadcastStepProgress();
+          broadcastStatus('acting', 'Signed in successfully. Resuming task execution...');
           activeTask._isExecuting = false;
           runStepQueue(tab.id);
         }
@@ -1829,6 +1895,129 @@ async function attemptAutonomousSignIn(tabId, currentUrl) {
   }
 }
 
+// ── DYNAMIC AUTH & LOGIN PAGE INSPECTOR ──────────────────────────────────────
+async function inspectAuthPageFields(tabId) {
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const text = (document.body?.innerText || '').toLowerCase();
+        const title = (document.title || '').toLowerCase();
+        const url = window.location.href.toLowerCase();
+
+        // 1. Detect if this is an authentication / login barrier
+        const hasPasswordField = document.querySelector('input[type="password"]') !== null;
+        const isAuthUrl = url.includes('/login') || url.includes('/signin') || url.includes('/onboarding') ||
+                          url.includes('mode=login') || url.includes('/auth') || url.includes('accounts.google.com') ||
+                          url.includes('/i/flow/login');
+        const hasAuthText = text.includes("see what's happening") || text.includes("sign in to x") ||
+                            text.includes("happening now") || text.includes("join today") ||
+                            text.includes("sign in to continue") || text.includes("log in to continue") ||
+                            text.includes("enter your password") || text.includes("create an account") ||
+                            text.includes("welcome back") || text.includes("log in to") || text.includes("sign in to") ||
+                            title.includes("log in") || title.includes("sign in") || title.includes("login");
+
+        const hasOtpOr2Fa = text.includes('two-factor') || text.includes('verification code') ||
+                            text.includes('one-time password') || text.includes('enter otp') ||
+                            document.querySelector('input[autocomplete="one-time-code"]') !== null;
+
+        const isAuth = hasPasswordField || isAuthUrl || hasAuthText || hasOtpOr2Fa;
+
+        // 2. Extract SSO buttons (Google, Apple, Phone, Microsoft, etc.)
+        const ssoButtons = Array.from(document.querySelectorAll('button, a, div[role="button"]'))
+          .map(b => (b.innerText || b.textContent || '').trim())
+          .filter(t => /continue with|sign in with|log in with/i.test(t))
+          .map(t => t.replace(/\s+/g, ' ').trim());
+
+        // 3. Extract visible interactive input fields on the login screen
+        const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])'))
+          .filter(inp => {
+            const rect = inp.getBoundingClientRect();
+            const style = window.getComputedStyle(inp);
+            if (rect.width === 0 || rect.height === 0 || style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+            const t = (inp.type || 'text').toLowerCase();
+            const name = (inp.name || '').toLowerCase();
+            const placeholder = (inp.placeholder || '').toLowerCase();
+            const autocomplete = (inp.autocomplete || '').toLowerCase();
+            return t === 'password' || t === 'email' || t === 'tel' ||
+                   autocomplete.includes('username') || autocomplete.includes('email') || autocomplete.includes('current-password') ||
+                   name.includes('user') || name.includes('login') || name.includes('email') || name.includes('phone') || name.includes('pass') || name.includes('identifier') ||
+                   placeholder.includes('user') || placeholder.includes('email') || placeholder.includes('phone') || placeholder.includes('password') ||
+                   inp.closest('form')?.querySelector('input[type="password"]') !== null;
+          });
+
+        const fields = inputs.map((inp, idx) => {
+          const type = (inp.type || 'text').toLowerCase();
+          const isPass = type === 'password' || (inp.name || '').toLowerCase().includes('pass');
+          let label = '';
+          if (inp.id) {
+            const lbl = document.querySelector(`label[for="${inp.id}"]`);
+            if (lbl) label = (lbl.innerText || lbl.textContent || '').trim();
+          }
+          if (!label && inp.closest('label')) {
+            label = (inp.closest('label').innerText || '').trim();
+          }
+          if (!label && inp.getAttribute('aria-label')) {
+            label = inp.getAttribute('aria-label').trim();
+          }
+          if (!label && inp.placeholder) {
+            label = inp.placeholder.trim();
+          }
+          if (!label) {
+            if (isPass) label = 'Password';
+            else if (type === 'email') label = 'Email Address';
+            else if (type === 'tel') label = 'Phone Number';
+            else label = idx === 0 ? 'Username or Email' : `Input Field ${idx + 1}`;
+          }
+
+          let selector = '';
+          if (inp.id) selector = `#${inp.id}`;
+          else if (inp.name) selector = `input[name="${inp.name}"]`;
+          else if (inp.autocomplete) selector = `input[autocomplete="${inp.autocomplete}"]`;
+          else if (type === 'password') selector = 'input[type="password"]';
+          else selector = `input[type="${type}"]`;
+
+          return {
+            key: inp.name || inp.id || `field_${idx}`,
+            name: inp.name || `field_${idx}`,
+            id: inp.id || '',
+            label: label.slice(0, 50),
+            type: isPass ? 'password' : (type === 'email' ? 'email' : (type === 'tel' ? 'tel' : 'text')),
+            placeholder: inp.placeholder || (isPass ? 'Enter password' : 'Enter detail'),
+            selector: selector
+          };
+        });
+
+        // 4. Extract site name
+        let siteName = 'this website';
+        try {
+          siteName = window.location.hostname.replace(/^www\./, '');
+        } catch(e) {}
+
+        // Fallback default fields if no specific inputs were discovered
+        const finalFields = fields.length > 0 ? fields.slice(0, 5) : [
+          { key: 'username', name: 'username', label: 'Username or Email', type: 'text', placeholder: 'Enter username or email', selector: 'input[type="email"], input[type="text"]' },
+          { key: 'password', name: 'password', label: 'Password', type: 'password', placeholder: 'Enter password', selector: 'input[type="password"]' }
+        ];
+
+        return {
+          isAuth,
+          hasOtpOr2Fa,
+          siteName,
+          fields: finalFields,
+          ssoButtons: [...new Set(ssoButtons)].slice(0, 5),
+          url: window.location.href
+        };
+      }
+    });
+
+    return res?.[0]?.result || null;
+  } catch (err) {
+    console.warn('[SQ-Auth] Error in inspectAuthPageFields:', err.message);
+    return null;
+  }
+}
+
 // ============================================================================
 // STEP QUEUE EXECUTOR
 // Runs the StepQueue one step at a time, with DOM-aware action dispatch,
@@ -1945,82 +2134,39 @@ async function runStepQueue(tabId) {
 
   // ── HUMAN-IN-THE-LOOP (HITL): Login, 2FA & Authentication Detection ─────────
   const currentTabObj = (activeTabs && activeTabs[0]) ? activeTabs[0] : null;
-  const currentTabUrl = (currentTabObj?.url || '').toLowerCase();
-
-  let pageAuthCheck = null;
-  try {
-    const checkRes = await chrome.scripting.executeScript({
-      target: { tabId: targetTabId },
-      func: () => {
-        const text = (document.body?.innerText || '').toLowerCase();
-        const url = window.location.href.toLowerCase();
-        const isXRootLogin = (url.includes('x.com') || url.includes('twitter.com')) &&
-                             (text.includes('happening now') || text.includes('join today') || text.includes('sign in to x') || text.includes('new to x?'));
-        const hasAuthText = text.includes('happening now') || text.includes('join today') ||
-                            text.includes('sign in to continue') || text.includes('log in to continue') ||
-                            text.includes('sign in with') || text.includes('continue with');
-        const ssoButtons = Array.from(document.querySelectorAll('button, a, div[role="button"]'))
-          .map(b => (b.innerText || b.textContent || '').trim())
-          .filter(t => /continue with|sign in with|log in with/i.test(t));
-        return { isXRootLogin, hasAuthText, ssoButtons: [...new Set(ssoButtons)].slice(0, 4) };
-      }
-    });
-    pageAuthCheck = checkRes?.[0]?.result || null;
-  } catch (e) {}
-
-  const isAuthUrl = currentTabUrl.includes('/login') ||
-                    currentTabUrl.includes('/signin') ||
-                    currentTabUrl.includes('accounts.google.com') ||
-                    currentTabUrl.includes('/auth') ||
-                    currentTabUrl.includes('two-step-verification') ||
-                    currentTabUrl.includes('/i/flow/login') ||
-                    !!pageAuthCheck?.isXRootLogin;
-
-  const hasPasswordField = elements.some(el => {
-    const t = (el.type || el.tag_name || el.tag || '').toLowerCase();
-    const attr = JSON.stringify(el.attributes || {}).toLowerCase();
-    return t === 'password' || attr.includes('password') || attr.includes('passwd');
-  });
-
-  const hasOtpOr2Fa = elements.some(el => {
-    const attr = JSON.stringify(el.attributes || {}).toLowerCase();
-    const text = (el.text || el.label || '').toLowerCase();
-    return attr.includes('one-time-code') || attr.includes('otp') || text.includes('two-factor') || text.includes('verification code') || text.includes('enter otp');
-  });
-
+  const authInfo = await inspectAuthPageFields(targetTabId);
   const isExplicitLoginStep = step.label?.toLowerCase().includes('login') || step.label?.toLowerCase().includes('sign in');
-  if ((isAuthUrl || hasPasswordField || hasOtpOr2Fa || (pageAuthCheck?.hasAuthText && step.type === 'type' && !elements.some(e => e.role === 'searchbox' || e.name === 'q'))) && !isExplicitLoginStep && !activeTask._userHasSignedIn) {
-    console.log('[SQ] HITL: Authentication or login wall detected! Pausing for user interaction...');
+
+  if (authInfo?.isAuth && !isExplicitLoginStep && !activeTask._userHasSignedIn) {
+    console.log('[SQ] HITL: Authentication or login wall detected! Pausing for user interaction on:', authInfo.siteName);
     activeTask.status = 'waiting_user_input';
     activeTask._isExecuting = false;
     step.status = 'paused';
     broadcastStepProgress();
 
-    let siteName = 'this website';
-    try {
-      siteName = new URL(currentTabObj?.url || 'https://site.com').hostname.replace('www.', '');
-    } catch(e) {}
-
-    const pauseMsg = hasOtpOr2Fa
+    const siteName = authInfo.siteName || 'this website';
+    const pauseMsg = authInfo.hasOtpOr2Fa
       ? 'Paused: 2FA or OTP verification required. Please complete verification in browser, then click Continue.'
-      : `Paused at sign-in screen on ${siteName}. Please sign in in your browser or provide credentials in Side Panel to continue.`;
+      : `Sign-in required on ${siteName}. Choose Option 1 to sign in yourself, or Option 2 for the agent to auto-login.`;
 
     broadcastStatus('waiting_user_input', pauseMsg);
 
     chrome.tabs.sendMessage(targetTabId, {
       type: 'show_hud_overlay',
-      text: `⏸️ Sign-in required on ${siteName}: Please sign in, then click Continue in Side Panel`,
+      text: `⏸️ Sign-in required on ${siteName}: Sign in on page or use Action Req tab`,
       paused: true
     }).catch(() => {});
 
     chrome.runtime.sendMessage({
       type: 'require_user_input',
       payload: {
-        reason: hasOtpOr2Fa ? 'otp_2fa' : 'login_credentials',
-        title: hasOtpOr2Fa ? '2FA Verification Required' : `Sign-in Required on ${siteName}`,
+        reason: authInfo.hasOtpOr2Fa ? 'otp_2fa' : 'login_credentials',
+        title: authInfo.hasOtpOr2Fa ? '2FA Verification Required' : `Sign-in Required on ${siteName}`,
+        siteName: siteName,
         message: pauseMsg,
-        url: currentTabObj?.url || '',
-        ssoButtons: pageAuthCheck?.ssoButtons || []
+        url: authInfo.url || currentTabObj?.url || '',
+        fields: authInfo.fields,
+        ssoButtons: authInfo.ssoButtons
       }
     }).catch(() => {});
 
@@ -2994,53 +3140,19 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
                                currentUrl.includes('mode=login') ||
                                currentUrl.includes('/i/flow/login');
 
-      let pageAuthDetected = false;
-      let detectedSsoButtons = [];
+      const authInfo = await inspectAuthPageFields(tabId);
+      const isAuthDetected = authInfo?.isAuth || isAuthUrlPattern;
 
-      try {
-        const checkRes = await chrome.scripting.executeScript({
-          target: { tabId },
-          func: () => {
-            const text = (document.body?.innerText || '').toLowerCase();
-            const title = (document.title || '').toLowerCase();
-            const url = window.location.href.toLowerCase();
-            const isAuth = url.includes('/login') ||
-                           url.includes('/signin') ||
-                           url.includes('/onboarding') ||
-                           url.includes('mode=login') ||
-                           text.includes("see what's happening") ||
-                           text.includes("sign in to x") ||
-                           text.includes("happening now") ||
-                           text.includes("join today") ||
-                           text.includes("sign in to continue") ||
-                           text.includes("log in to continue") ||
-                           text.includes("enter your password") ||
-                           title.includes("log in") ||
-                           title.includes("sign in") ||
-                           document.querySelector('input[type="password"]') !== null;
-            const sso = Array.from(document.querySelectorAll('button, a, div[role="button"]'))
-              .map(b => (b.innerText || b.textContent || '').trim())
-              .filter(t => /continue with|sign in with|log in with/i.test(t));
-            return { isAuth, sso: [...new Set(sso)].slice(0, 5) };
-          }
-        });
-        const res = checkRes?.[0]?.result;
-        if (res?.isAuth || isAuthUrlPattern) {
-          pageAuthDetected = true;
-          detectedSsoButtons = res?.sso || [];
-        }
-      } catch (e) {
-        if (isAuthUrlPattern) pageAuthDetected = true;
-      }
-
-      if (pageAuthDetected && !activeTask._userHasSignedIn) {
+      if (isAuthDetected && !activeTask._userHasSignedIn) {
         console.log('[SQ] Post-navigation Login Wall / Auth Barrier Detected! Pausing for HITL on:', tab.url);
         activeTask.status = 'waiting_user_input';
         activeTask._isExecuting = false;
 
-        let siteName = 'this website';
+        let siteName = authInfo?.siteName || 'this website';
         try {
-          siteName = new URL(tab.url).hostname.replace('www.', '');
+          if (!siteName || siteName === 'this website') {
+            siteName = new URL(tab.url).hostname.replace('www.', '');
+          }
         } catch(e) {}
 
         // Ensure a paused step exists in the queue so it is not prematurely finished
@@ -3056,23 +3168,28 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         }
         broadcastStepProgress();
 
-        const pauseMsg = `Sign-in required on ${siteName}. Please sign in in browser or use the Action Req tab in Side Panel.`;
+        const pauseMsg = `Sign-in required on ${siteName}. Choose Option 1 to sign in yourself, or Option 2 for the agent to auto-login.`;
         broadcastStatus('waiting_user_input', pauseMsg);
 
         chrome.tabs.sendMessage(tabId, {
           type: 'show_hud_overlay',
-          text: `⏸️ Sign-in required on ${siteName}: Please sign in or use Action Req tab`,
+          text: `⏸️ Sign-in required on ${siteName}: Sign in on page or use Action Req tab`,
           paused: true
         }).catch(() => {});
 
         chrome.runtime.sendMessage({
           type: 'require_user_input',
           payload: {
-            reason: 'login_credentials',
-            title: `Sign-in Required on ${siteName}`,
-            message: `The agent reached an onboarding or login screen on ${siteName}. Please sign in in the browser window or use the One-Click SSO / credential fields below.`,
+            reason: authInfo?.hasOtpOr2Fa ? 'otp_2fa' : 'login_credentials',
+            title: authInfo?.hasOtpOr2Fa ? '2FA Verification Required' : `Sign-in Required on ${siteName}`,
+            siteName: siteName,
+            message: pauseMsg,
             url: tab.url,
-            ssoButtons: detectedSsoButtons.length > 0 ? detectedSsoButtons : ['Continue with Google', 'Continue with Apple', 'Continue with phone']
+            fields: authInfo?.fields || [
+              { key: 'username', name: 'username', label: 'Username or Email', type: 'text', placeholder: 'Enter username or email' },
+              { key: 'password', name: 'password', label: 'Password', type: 'password', placeholder: 'Enter password' }
+            ],
+            ssoButtons: (authInfo?.ssoButtons && authInfo.ssoButtons.length > 0) ? authInfo.ssoButtons : ['Continue with Google', 'Continue with Apple', 'Continue with phone']
           }
         }).catch(() => {});
 

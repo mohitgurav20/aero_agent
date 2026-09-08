@@ -221,41 +221,87 @@
 
     <!-- Tab 2: Interactive Human-In-The-Loop (HITL) Drawer -->
     <div id="tab-view-hitl" style="display: none; flex-direction: column; gap: 12px;">
-      <div style="background: rgba(245, 158, 11, 0.12); border: 1.5px solid #f59e0b; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px;">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 20px;">⏸️</span>
+      <div style="background: rgba(245, 158, 11, 0.08); border: 1.5px solid #f59e0b; border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 12px;">
+        
+        <!-- Header Banner -->
+        <div style="display: flex; align-items: center; gap: 10px; border-bottom: 1px solid rgba(245, 158, 11, 0.25); padding-bottom: 10px;">
+          <div style="width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg, #f59e0b, #d97706); display: flex; align-items: center; justify-content: center; font-size: 17px; color: white; flex-shrink: 0; box-shadow: 0 2px 8px rgba(245, 158, 11, 0.35);">🔐</div>
           <div>
-            <h3 id="hitl-banner-title" style="font-size: 13px; font-weight: 700; color: #b45309; margin: 0;">Sign-in / Verification Required</h3>
-            <p id="hitl-banner-sub" style="font-size: 11px; color: #78350f; margin: 2px 0 0 0;">The agent has paused for your safety &amp; credentials</p>
+            <h3 id="hitl-banner-title" style="font-size: 13.5px; font-weight: 700; color: #92400e; margin: 0;">Sign-in Required</h3>
+            <p id="hitl-banner-sub" style="font-size: 11px; color: #b45309; margin: 2px 0 0 0;">Select your preferred sign-in method to continue</p>
           </div>
         </div>
-        <p id="hitl-banner-desc" style="font-size: 12px; color: #92400e; line-height: 1.45; background: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid #fde68a; margin: 0;">
-          The agent reached a login screen or verification step. Please enter your credentials or complete sign-in in your browser window, then click Continue below.
+
+        <p id="hitl-banner-desc" style="font-size: 11.5px; color: #78350f; line-height: 1.45; margin: 0; background: #ffffff; padding: 9px 12px; border-radius: 8px; border: 1px solid #fde68a;">
+          The agent reached a sign-in screen. You can either sign in yourself directly in the browser, or provide the credentials below for the agent to auto-login.
         </p>
 
-        <!-- Primary Action: User manually signed in -->
-        <button id="hitl-continue-btn" style="width: 100%; padding: 10px; font-size: 13px; font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 10px; cursor: pointer; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s ease;">
-          <span>✅</span>
-          <span>I've Signed In in Browser — Continue Task</span>
-        </button>
-
-        <!-- One-Click SSO Options -->
-        <div id="hitl-sso-container" style="display: flex; flex-direction: column; gap: 6px; margin-top: 4px;">
-          <span style="font-size: 11px; font-weight: 600; color: #92400e;">⚡ One-Click SSO Options:</span>
-          <div id="hitl-sso-buttons" style="display: flex; flex-wrap: wrap; gap: 6px;">
-            <button class="clarify-sso-chip" data-sso="Google" style="padding: 6px 11px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid #fed7aa; background: #fff; cursor: pointer; color: #9a3412;">Continue with Google</button>
-            <button class="clarify-sso-chip" data-sso="Apple" style="padding: 6px 11px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid #fed7aa; background: #fff; cursor: pointer; color: #9a3412;">Continue with Apple</button>
-            <button class="clarify-sso-chip" data-sso="phone" style="padding: 6px 11px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid #fed7aa; background: #fff; cursor: pointer; color: #9a3412;">Continue with phone</button>
+        <!-- OPTION 1: User signs in manually in browser -->
+        <div style="background: #ffffff; border: 1.5px solid #e2e8f0; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.03);">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span style="font-size: 10px; font-weight: 800; background: #e0f2fe; color: #0369a1; padding: 2px 7px; border-radius: 9999px; text-transform: uppercase;">Option 1</span>
+              <span style="font-size: 12px; font-weight: 700; color: #0f172a;">Sign In Yourself in Browser</span>
+            </div>
+            <span style="font-size: 11px; color: #64748b;">Manual</span>
           </div>
+          <p style="font-size: 11px; color: #64748b; margin: 0; line-height: 1.4;">
+            Sign in on the webpage using your browser password manager, passkey, or SSO.
+          </p>
+
+          <!-- One-Click SSO Options (if detected on page) -->
+          <div id="hitl-sso-container" style="display: flex; flex-direction: column; gap: 5px; margin: 2px 0;">
+            <span style="font-size: 10.5px; font-weight: 600; color: #92400e;">⚡ Detected One-Click SSO:</span>
+            <div id="hitl-sso-buttons" style="display: flex; flex-wrap: wrap; gap: 6px;">
+              <button class="clarify-sso-chip" data-sso="Google" style="padding: 5px 10px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid #fed7aa; background: #fff; cursor: pointer; color: #9a3412;">Continue with Google</button>
+              <button class="clarify-sso-chip" data-sso="Apple" style="padding: 5px 10px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid #fed7aa; background: #fff; cursor: pointer; color: #9a3412;">Continue with Apple</button>
+            </div>
+          </div>
+
+          <button id="hitl-continue-btn" style="width: 100%; padding: 9px; font-size: 12px; font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25); display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s ease;">
+            <span>✅</span>
+            <span>I've Signed In in Browser — Continue Task</span>
+          </button>
         </div>
 
-        <!-- Manual Credential Inputs (Optional convenience) -->
-        <div id="hitl-creds-box" style="background: #ffffff; border: 1px solid #fed7aa; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px;">
-          <span style="font-size: 11px; font-weight: 700; color: #b45309;">🔑 Or Provide Credentials to Fill:</span>
-          <input type="text" id="hitl-username-input" placeholder="Username or Email..." style="padding: 6px 8px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 11px;" />
-          <input type="password" id="hitl-password-input" placeholder="Password..." style="padding: 6px 8px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 11px;" />
-          <button id="hitl-submit-creds-btn" style="padding: 7px; background: #f59e0b; color: white; font-size: 11px; font-weight: 700; border: none; border-radius: 6px; cursor: pointer;">Fill &amp; Continue Task</button>
+        <!-- DIVIDER -->
+        <div style="display: flex; align-items: center; gap: 8px; margin: 2px 0;">
+          <div style="flex: 1; height: 1px; background: rgba(245, 158, 11, 0.3);"></div>
+          <span style="font-size: 10px; font-weight: 800; color: #b45309; letter-spacing: 0.5px;">OR</span>
+          <div style="flex: 1; height: 1px; background: rgba(245, 158, 11, 0.3);"></div>
         </div>
+
+        <!-- OPTION 2: Agent Auto-Login with dynamic website-specific fields -->
+        <div style="background: #ffffff; border: 1.5px solid #fed7aa; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.03);">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span style="font-size: 10px; font-weight: 800; background: #ffedd5; color: #c2410c; padding: 2px 7px; border-radius: 9999px; text-transform: uppercase;">Option 2</span>
+              <span style="font-size: 12px; font-weight: 700; color: #0f172a;" id="hitl-agent-opt-title">Let Agent Sign You In</span>
+            </div>
+            <span style="font-size: 11px; color: #ea580c; font-weight: 600;">Autonomous</span>
+          </div>
+          <p id="hitl-agent-opt-desc" style="font-size: 11px; color: #64748b; margin: 0; line-height: 1.4;">
+            Provide the details requested by this website and the agent will automatically type them, submit the form, and follow up next steps.
+          </p>
+
+          <!-- Dynamically Injected Form Fields matching the target website -->
+          <div id="hitl-dynamic-fields-container" style="display: flex; flex-direction: column; gap: 7px; margin-top: 2px;">
+            <div class="hitl-dynamic-field-group">
+              <label style="font-size: 10.5px; font-weight: 600; color: #475569; margin-bottom: 2px; display: block;">Username or Email</label>
+              <input type="text" id="hitl-username-input" placeholder="Enter username or email..." style="width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1.5px solid #e2e8f0; border-radius: 7px; font-size: 11.5px;" />
+            </div>
+            <div class="hitl-dynamic-field-group">
+              <label style="font-size: 10.5px; font-weight: 600; color: #475569; margin-bottom: 2px; display: block;">Password</label>
+              <input type="password" id="hitl-password-input" placeholder="Enter password..." style="width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1.5px solid #e2e8f0; border-radius: 7px; font-size: 11.5px;" />
+            </div>
+          </div>
+
+          <button id="hitl-submit-creds-btn" style="width: 100%; margin-top: 4px; padding: 9px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; font-size: 12px; font-weight: 700; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3); display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s ease;">
+            <span>🔑</span>
+            <span id="hitl-submit-creds-btn-text">Fill &amp; Auto-Login with Agent ➔</span>
+          </button>
+        </div>
+
       </div>
     </div>
 
