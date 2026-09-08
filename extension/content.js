@@ -1041,6 +1041,55 @@
 
     if (!rawTarget) return null;
 
+    // ── Dedicated WhatsApp Web Element Resolution ─────────────────────────────
+    if (window.location.hostname.includes('whatsapp.com')) {
+      const isSearchIntent = rawTarget.includes('search') || rawTarget.includes('find') || rawTarget.includes('start new chat') || rawTarget.includes('start a new chat');
+      const isMessageIntent = rawTarget.includes('message') || rawTarget.includes('body') || rawTarget.includes('type a message') || rawTarget.includes('text');
+      const isSendIntent = rawTarget.includes('send') || rawTarget === 'send';
+
+      if (isSearchIntent) {
+        const waSearch = document.querySelector('#side [contenteditable="true"], div[data-tab="3"], [data-testid="chat-list-search"], #side [role="textbox"], #side p.selectable-text')
+          || (document.querySelectorAll('[contenteditable="true"]').length > 0 ? document.querySelectorAll('[contenteditable="true"]')[0] : null);
+        if (waSearch) {
+          console.log('[Content] Matched WhatsApp Web search input:', waSearch);
+          return waSearch;
+        }
+      }
+
+      if (isMessageIntent) {
+        const waMsg = document.querySelector('#main footer [contenteditable="true"], footer [contenteditable="true"], div[data-tab="10"], [data-testid="conversation-compose-box-input"], footer [role="textbox"]')
+          || (document.querySelectorAll('[contenteditable="true"]').length > 1 ? document.querySelectorAll('[contenteditable="true"]')[document.querySelectorAll('[contenteditable="true"]').length - 1] : null);
+        if (waMsg) {
+          console.log('[Content] Matched WhatsApp Web message input:', waMsg);
+          return waMsg;
+        }
+      }
+
+      if (isSendIntent) {
+        const waSend = document.querySelector('span[data-icon="send"], button[aria-label*="send" i], [data-testid="send"], [data-testid="compose-btn-send"], footer button:has(svg), footer button');
+        if (waSend) {
+          console.log('[Content] Matched WhatsApp Web send button:', waSend);
+          return waSend;
+        }
+      }
+
+      // Contact / chat matching in WhatsApp Web chat list
+      const cleanName = rawTarget.replace(/^(?:open\s+chat\s+with|chat\s+with|open\s+chat|select\s+chat\s+with|select\s+chat|click\s+on\s+contact|click\s+contact|contact|chat|user)\s+/i, '').trim();
+      if (cleanName) {
+        const waContact = document.querySelector(
+          `#side span[title*="${cleanName}" i], span[title*="${cleanName}" i], div[title*="${cleanName}" i], [role="listitem"]:has(span[title*="${cleanName}" i]), [role="row"]:has(span[title*="${cleanName}" i]), div[data-testid*="cell"]:has(span[title*="${cleanName}" i])`
+        ) || Array.from(document.querySelectorAll('#side div[role="listitem"], #side div[role="row"], #side div[role="gridcell"], #side div._ak8l, #side div._ak72, #side div._ak73, #side span[title], #side div[title], [role="listitem"], [role="row"]')).find(el => {
+          const title = (el.getAttribute('title') || '').toLowerCase();
+          const text = (el.innerText || el.textContent || '').toLowerCase();
+          return (title.includes(cleanName) || text.includes(cleanName)) && text.length < 90;
+        });
+        if (waContact) {
+          console.log('[Content] Matched WhatsApp Web contact/chat:', waContact);
+          return waContact;
+        }
+      }
+    }
+
     // Direct high-accuracy selectors for email/compose actions
     if (rawTarget.includes('compose')) {
       const composeBtn = document.querySelector('div[gh="cm"], .T-I-KE, [data-tooltip="Compose"], [aria-label="Compose"], [aria-label*="Compose"]')

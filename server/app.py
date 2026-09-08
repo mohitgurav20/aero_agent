@@ -882,8 +882,7 @@ def decompose_goal():
         "JSON:\n"
         "[\n"
         '  {"type": "navigate", "url": "https://web.whatsapp.com/", "label": "Open WhatsApp Web"},\n'
-        '  {"type": "click", "target": "Search or start new chat", "label": "Click search box"},\n'
-        '  {"type": "type", "field": "Search or start new chat", "value": "suresh", "label": "Search for \'suresh\'"},\n'
+        '  {"type": "type", "field": "Search or start a new chat", "value": "suresh", "label": "Search for \'suresh\'"},\n'
         '  {"type": "click", "target": "suresh", "label": "Open chat with suresh"},\n'
         '  {"type": "type", "field": "Type a message", "value": "Good evening Suresh, I hope you are having a productive and pleasant evening.", "label": "Type formal evening message"},\n'
         '  {"type": "press_key", "key": "Enter", "label": "Send message"}\n'

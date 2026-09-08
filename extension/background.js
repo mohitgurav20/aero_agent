@@ -872,8 +872,7 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
     }
 
     if (recipient) {
-      steps.push({ type: 'click', target: 'Search or start new chat', label: 'Click search box' });
-      steps.push({ type: 'type', field: 'Search or start new chat', value: recipient, label: `Search for '${recipient}'` });
+      steps.push({ type: 'type', field: 'Search or start a new chat', value: recipient, label: `Search for '${recipient}'` });
       steps.push({ type: 'click', target: recipient, label: `Open chat with ${recipient}` });
     }
 
@@ -2986,6 +2985,17 @@ async function runStepQueue(tabId) {
 
     // If semantic recovery was attempted (tag_id: 0) and failed to find target
     if (hasFailures && actions.some(a => a.tag_id === 0)) {
+      // Non-fatal resilience: If this was a search click or preparatory click, advance to next step instead of failing!
+      const isPrepClick = step.type === 'click' && (step.label?.toLowerCase().includes('search') || (step.target || '').toLowerCase().includes('search'));
+      if (isPrepClick) {
+        console.warn(`[SQ] Preparatory click "${step.label}" skipped, advancing to next step...`);
+        step.status = 'done';
+        broadcastStepProgress();
+        activeTask._isExecuting = false;
+        setTimeout(() => runStepQueue(targetTabId), 300);
+        return;
+      }
+
       console.warn(`[SQ] Target element for "${step.label}" could not be found in DOM.`);
       step.status = 'failed';
       broadcastStepProgress();
