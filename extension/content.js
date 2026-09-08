@@ -844,33 +844,37 @@
         return;
       }
     } else if (element.isContentEditable || element.getAttribute('contenteditable') === 'true' || element.getAttribute('role') === 'textbox' || element.closest('[contenteditable="true"]')) {
-      // For Gmail/Outlook compose body which uses contenteditable divs
+      // For WhatsApp Web, Gmail, Outlook compose body which uses contenteditable divs
       const targetEditable = element.isContentEditable ? element : (element.closest('[contenteditable="true"]') || element);
       targetEditable.focus();
       if (typeof targetEditable.click === 'function') {
         try { targetEditable.click(); } catch (e) { }
       }
 
-      // Convert text with newlines into clean HTML paragraphs for rich text rendering
-      const lines = text.split(/\r?\n/);
-      const htmlContent = lines.map(line => {
-        const safe = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        return safe ? `<div>${safe}</div>` : `<div><br></div>`;
-      }).join('');
+      // 1. Try native execCommand first (crucial for Lexical/Draft.js on WhatsApp Web & LinkedIn to enable Send button)
+      let execSuccess = false;
+      try {
+        document.execCommand('selectAll', false, null);
+        execSuccess = document.execCommand('insertText', false, text);
+      } catch (e) { }
 
-      // Assign rich HTML paragraphs directly into the message body
-      targetEditable.innerHTML = htmlContent;
-
-      // Dispatch comprehensive input events so Gmail draft engine commits the text
-      targetEditable.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: text, inputType: 'insertText' }));
-      targetEditable.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-      targetEditable.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-
-      if (!targetEditable.innerText || targetEditable.innerText.trim().length === 0) {
-        targetEditable.innerText = text;
+      // 2. If text not set, fallback to HTML / innerText assignment
+      if (!execSuccess || !targetEditable.innerText || targetEditable.innerText.trim().length === 0) {
+        const lines = text.split(/\r?\n/);
+        const htmlContent = lines.map(line => {
+          const safe = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return safe ? `<div>${safe}</div>` : `<div><br></div>`;
+        }).join('');
+        targetEditable.innerHTML = htmlContent;
+        if (!targetEditable.innerText || targetEditable.innerText.trim().length === 0) {
+          targetEditable.innerText = text;
+        }
       }
 
-      // Dispatch comprehensive input events so Gmail draft engine commits the text
+      // 3. Dispatch comprehensive input events so draft engines & React commit the text
+      try {
+        targetEditable.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, data: text, inputType: 'insertText' }));
+      } catch (e) { }
       targetEditable.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: text, inputType: 'insertText' }));
       targetEditable.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
       targetEditable.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
@@ -1070,8 +1074,10 @@
       }
     }
 
-    if (rawTarget.includes('body') || rawTarget.includes('message') || rawTarget.includes('content') || rawTarget.includes('text')) {
-      const bodyInput = composeDialog.querySelector('div[role="textbox"][contenteditable="true"], div[aria-label*="Message Body" i], div[aria-label*="Message text" i], div[role="textbox"], div[g_editable="true"]')
+    if (rawTarget.includes('body') || rawTarget.includes('message') || rawTarget.includes('content') || rawTarget.includes('text') || rawTarget.includes('type a message') || rawTarget.includes('message input field')) {
+      const bodyInput = document.querySelector(
+        'footer div[contenteditable="true"], div[contenteditable="true"][data-tab="10"], div[role="textbox"][title*="message" i], div[role="textbox"][aria-label*="message" i], div[data-testid="conversation-compose-box-input"], footer [contenteditable="true"]'
+      ) || composeDialog.querySelector('div[role="textbox"][contenteditable="true"], div[aria-label*="Message Body" i], div[aria-label*="Message text" i], div[role="textbox"], div[g_editable="true"]')
         || composeDialog.querySelector('div[contenteditable="true"]')
         || document.querySelector('div[role="dialog"] div[contenteditable="true"]');
       if (bodyInput) {
@@ -1182,9 +1188,9 @@
       }
 
       const searchInput = document.querySelector(
-        '#twotabsearchtextbox, input#nav-search-keywords, input[name="field-keywords"], input[name="q"], input[type="search"], input[name="search"], input[aria-label*="Search" i], input[placeholder*="Search" i], textarea[name="q"]'
-      ) || Array.from(document.querySelectorAll('input[type="text"], input[type="search"], input:not([type])')).find(el => {
-        const lbl = (el.getAttribute('aria-label') || el.placeholder || el.name || el.id || '').toLowerCase();
+        'div[contenteditable="true"][data-tab="3"], div[role="textbox"][title*="search" i], div[role="textbox"][aria-label*="search" i], [data-testid="chat-list-search"], #twotabsearchtextbox, input#nav-search-keywords, input[name="field-keywords"], input[name="q"], input[type="search"], input[name="search"], input[aria-label*="Search" i], input[placeholder*="Search" i], textarea[name="q"]'
+      ) || Array.from(document.querySelectorAll('input[type="text"], input[type="search"], input:not([type]), [contenteditable="true"]')).find(el => {
+        const lbl = (el.getAttribute('aria-label') || el.getAttribute('title') || el.placeholder || el.name || el.id || '').toLowerCase();
         return lbl.includes('search') || lbl.includes('query');
       });
       if (searchInput) {
@@ -1300,7 +1306,33 @@
       }
     }
 
-    const candidates = Array.from(document.querySelectorAll('button, a, input, select, textarea, [role="button"], [role="link"], div[onclick], span[onclick], iframe, [tabindex]'));
+    // Direct Send button selector (WhatsApp Web, forms, etc.)
+    if (rawTarget.includes('send') || rawTarget.includes('send button') || rawTarget === 'send') {
+      const sendBtn = document.querySelector(
+        'span[data-icon="send"], button[aria-label*="send" i], [data-testid="send"], [data-testid="compose-btn-send"], footer button:has(span[data-icon="send"]), footer button:has(svg)'
+      );
+      if (sendBtn) {
+        console.log('[Content] Matched Send button via direct selector:', sendBtn);
+        return sendBtn;
+      }
+    }
+
+    // Direct contact / recipient / chat row selector (WhatsApp Web, Telegram, Slack, etc.)
+    if (step.action === 'click' || step.type === 'click') {
+      const contactEl = document.querySelector(
+        `span[title*="${rawTarget}" i], div[title*="${rawTarget}" i], [role="listitem"]:has(span[title*="${rawTarget}" i]), [role="row"]:has(span[title*="${rawTarget}" i]), div[data-testid*="cell"]:has(span[title*="${rawTarget}" i]), [data-testid="chat-list"] span[title*="${rawTarget}" i]`
+      ) || Array.from(document.querySelectorAll('div[role="listitem"], div[role="row"], div[role="gridcell"], div[data-testid*="cell"], div[data-testid*="chat"], div._ak8l, div._ak72, div._ak73, span[title], div[title]')).find(el => {
+        const titleAttr = (el.getAttribute('title') || '').toLowerCase();
+        const text = (el.innerText || el.textContent || '').toLowerCase();
+        return (titleAttr.includes(rawTarget) || text.includes(rawTarget)) && text.length < 80;
+      });
+      if (contactEl) {
+        console.log('[Content] Matched contact/chat element semantically:', contactEl);
+        return contactEl;
+      }
+    }
+
+    const candidates = Array.from(document.querySelectorAll('button, a, input, select, textarea, [role="button"], [role="link"], div[onclick], span[onclick], iframe, [tabindex], [role="listitem"], [role="row"], [role="gridcell"], div[data-testid*="cell"], div[data-testid*="chat"], div._ak8l, div._ak72, div._ak73, span[title], div[title]'));
     let best = null;
     let bestScore = 0;
 
@@ -1488,6 +1520,16 @@
             // Synthetic KeyboardEvent('Enter') does NOT trigger browser default form submission.
             // Actively locate and tap the search icon / submit button or trigger form.requestSubmit().
             if (keyName === 'Enter') {
+              // WhatsApp Web: click Send button if present
+              const waSendBtn = document.querySelector('span[data-icon="send"], button[aria-label*="send" i], [data-testid="send"], [data-testid="compose-btn-send"], footer button:has(span[data-icon="send"])');
+              if (waSendBtn) {
+                console.log('[Content] Tapping WhatsApp Send button on Enter:', waSendBtn);
+                await simulateClick(waSendBtn);
+                result.success = true;
+                result.page_changed = true;
+                break;
+              }
+
               const isEmailPage = window.location.hostname.includes('mail.google.com') ||
                 window.location.hostname.includes('gmail.com') ||
                 (target && target.closest && (target.closest('[role="dialog"]') || target.closest('div[aria-label*="Compose" i]')));

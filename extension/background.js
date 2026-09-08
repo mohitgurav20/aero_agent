@@ -740,6 +740,12 @@ const KNOWN_SITE_DOMAINS = {
   youtube: 'https://www.youtube.com',
   google: 'https://www.google.com',
   gmail: 'https://mail.google.com',
+  whatsapp: 'https://web.whatsapp.com',
+  'whatsapp web': 'https://web.whatsapp.com',
+  'web.whatsapp.com': 'https://web.whatsapp.com',
+  'web whatsapp': 'https://web.whatsapp.com',
+  telegram: 'https://web.telegram.org',
+  'telegram web': 'https://web.telegram.org',
   spotify: 'https://open.spotify.com',
   instagram: 'https://www.instagram.com',
   twitter: 'https://www.twitter.com',
@@ -831,6 +837,50 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
 
     steps.push({ type: 'click', target: 'Create repository', label: 'Submit — Create repository' });
     return { steps, context };
+  }
+
+  // ── 1B. MESSAGING & CHAT WORKFLOW (WhatsApp, Telegram, etc.) ───────────────
+  const isMessagingGoal = /\b(?:whatsapp|telegram|slack)\b/i.test(q) &&
+                          /\b(?:message|msg|send|chat|text|dm)\b/i.test(q);
+
+  if (isMessagingGoal) {
+    const isWhatsapp = /\bwhatsapp\b/i.test(q) || (currentUrl && currentUrl.includes('whatsapp.com'));
+    const isTelegram = /\btelegram\b/i.test(q) || (currentUrl && currentUrl.includes('telegram.org'));
+    const webUrl = isWhatsapp ? 'https://web.whatsapp.com' : (isTelegram ? 'https://web.telegram.org' : 'https://web.whatsapp.com');
+    const appName = isWhatsapp ? 'WhatsApp Web' : (isTelegram ? 'Telegram Web' : 'Messaging app');
+
+    steps.push({ type: 'navigate', url: webUrl, label: `Open ${appName}` });
+
+    const recipientMatch = q.match(/(?:message|msg|text|dm)\s+(?:to\s+)?([a-zA-Z0-9_]+)/i)
+                        || q.match(/(?:send\s+(?:a\s+)?(?:message|msg|text)\s+to\s+)([a-zA-Z0-9_]+)/i);
+    const recipient = recipientMatch ? recipientMatch[1].trim() : null;
+
+    let msgContent = 'Hello!';
+    const sayingMatch = q.match(/(?:saying|that|content\s+is)\s+(.+)$/i);
+    const msgMatch = q.match(/(?:message|msg|text)\s+(?:to\s+)?[a-zA-Z0-9_]+\s+(?:a\s+)?(.+)$/i);
+
+    if (sayingMatch) {
+      msgContent = sayingMatch[1].trim();
+    } else if (msgMatch) {
+      const desc = msgMatch[1].trim();
+      if (desc.includes('formal') || desc.includes('evening')) {
+        const nameCap = recipient ? recipient.charAt(0).toUpperCase() + recipient.slice(1) : '';
+        msgContent = `Good evening ${nameCap}, I hope you are having a pleasant and productive evening.`;
+      } else {
+        msgContent = desc.charAt(0).toUpperCase() + desc.slice(1);
+      }
+    }
+
+    if (recipient) {
+      steps.push({ type: 'click', target: 'Search or start new chat', label: 'Click search box' });
+      steps.push({ type: 'type', field: 'Search or start new chat', value: recipient, label: `Search for '${recipient}'` });
+      steps.push({ type: 'click', target: recipient, label: `Open chat with ${recipient}` });
+    }
+
+    steps.push({ type: 'type', field: 'Type a message', value: msgContent, label: `Type message for ${recipient || 'contact'}` });
+    steps.push({ type: 'press_key', key: 'Enter', label: 'Send message' });
+
+    return { steps, context: { ...context, hasNavigated: true, topic: `Message ${recipient} on ${appName}` } };
   }
 
   // ── 2. CANVA PRESENTATION / PITCH DECK WORKFLOW ───────────────────────────
@@ -2087,6 +2137,24 @@ async function runStepQueue(tabId) {
   if (step.type === 'navigate') {
     step.status = 'running';
     broadcastStepProgress();
+
+    // If active tab is already on target page/domain, skip full reload to preserve session & chat state
+    try {
+      const currentTab = await chrome.tabs.get(tabId).catch(() => null);
+      if (currentTab && currentTab.url) {
+        const uCurrent = new URL(currentTab.url);
+        const uTarget = new URL(step.url);
+        if (uCurrent.hostname === uTarget.hostname && (uCurrent.pathname === uTarget.pathname || uTarget.pathname === '/' || uTarget.pathname === '')) {
+          console.log('[SQ] Already on destination page, skipping redundant reload:', step.url);
+          step.status = 'done';
+          broadcastStepProgress();
+          activeTask._isExecuting = false;
+          setTimeout(() => runStepQueue(tabId), 300);
+          return;
+        }
+      }
+    } catch (e) {}
+
     activeTask.status = 'navigating';
     activeTask.navigatingTabId = tabId;
     activeTask.navigatingUrl = step.url;
@@ -3482,6 +3550,9 @@ function resolveStepToActions(step, elements) {
     }
     if (bestEl && bestScore >= 20) {
       actions.push({ step: 0, tag_id: bestEl.tag_id, action: 'click', description: step.label });
+    } else {
+      // Direct pass-through to content.js live semantic DOM recovery
+      actions.push({ step: 0, tag_id: 0, action: 'click', target: step.target, intent: step.target, description: step.label });
     }
   }
 
