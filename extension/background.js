@@ -3014,7 +3014,8 @@ async function runStepQueue(tabId) {
     // Broadcast generated email / artifact to side panel ONLY for genuine email tasks (never for WhatsApp or chat apps)
     const activeGoalStr = (activeTask.goal || '').toLowerCase();
     const isChatApp = activeGoalStr.includes('whatsapp') || activeGoalStr.includes('telegram') || activeGoalStr.includes('slack') || activeGoalStr.includes('discord') || activeGoalStr.includes('twitter') || activeGoalStr.includes('instagram');
-    const isEmailTask = (activeGoalStr.includes('email') || activeGoalStr.includes('gmail') || activeGoalStr.includes('mail') || (targetTab?.url && (targetTab.url.includes('mail.google.com') || targetTab.url.includes('outlook')))) && !isChatApp;
+    const activeUrl = currentTabObj?.url || '';
+    const isEmailTask = (activeGoalStr.includes('email') || activeGoalStr.includes('gmail') || activeGoalStr.includes('mail') || activeUrl.includes('mail.google.com') || activeUrl.includes('outlook')) && !isChatApp;
 
     if (isEmailTask && step.type === 'type' && (step.field?.includes('body') || step.field?.includes('email') || step.field?.includes('message'))) {
       const recipientStep = activeTask.steps.find(s => s.field?.includes('recipient') || s.field?.includes('to'));
