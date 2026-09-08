@@ -539,12 +539,16 @@
       ? (((rawCount - extracted.length) / rawCount) * 100).toFixed(1)
       : 0;
 
+    const sanitizedElements = (typeof window !== 'undefined' && window.PIIDetector && typeof window.PIIDetector.sanitizeElements === 'function')
+      ? window.PIIDetector.sanitizeElements(extracted)
+      : extracted;
+
     cachedDomData = {
       url: window.location.href,
       title: document.title,
-      elements: extracted,
+      elements: sanitizedElements,
       alerts: activeAlerts,
-      element_count: extracted.length,
+      element_count: sanitizedElements.length,
       raw_element_count: rawCount,
       reduction_percent: parseFloat(reduction)
     };
