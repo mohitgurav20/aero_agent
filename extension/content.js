@@ -9,7 +9,7 @@
  * Owner: Mohit
  */
 
-(function() {
+(function () {
   'use strict';
 
   window.__SIH26171_CONTENT_INITIALIZED__ = Date.now();
@@ -23,6 +23,206 @@
   let mutationDebounceTimer = null;
   const mutatedElementsSet = new Set();
   let lastInteractedElement = null;
+
+  // Antigravity-Style HUD Overlay State
+  let hudOverlayContainer = null;
+  let hudTargetReticle = null;
+  let hudTextSpan = null;
+  let hudPillElement = null;
+
+  function ensureHudOverlay() {
+    if (document.getElementById('aero-agent-hud-overlay')) {
+      hudOverlayContainer = document.getElementById('aero-agent-hud-overlay');
+      hudTargetReticle = document.getElementById('aero-agent-target-reticle');
+      hudTextSpan = document.getElementById('aero-agent-hud-text');
+      hudPillElement = document.getElementById('aero-agent-hud-pill');
+      return;
+    }
+
+    if (!document.getElementById('aero-agent-hud-styles')) {
+      const styleEl = document.createElement('style');
+      styleEl.id = 'aero-agent-hud-styles';
+      styleEl.textContent = `
+        #aero-agent-hud-overlay {
+          position: fixed !important;
+          inset: 0 !important;
+          pointer-events: none !important;
+          z-index: 2147483640 !important;
+          transition: opacity 0.28s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.28s ease !important;
+          opacity: 0;
+          visibility: hidden;
+        }
+        #aero-agent-hud-overlay.active {
+          opacity: 1 !important;
+          visibility: visible !important;
+        }
+        #aero-agent-hud-vignette {
+          position: absolute !important;
+          inset: 0 !important;
+          pointer-events: none !important;
+          box-shadow: inset 0 0 70px 14px rgba(59, 130, 246, 0.28), inset 0 0 140px 30px rgba(14, 165, 233, 0.16) !important;
+          border: 2px solid rgba(56, 189, 248, 0.45) !important;
+          box-sizing: border-box !important;
+          animation: aero-border-pulse 3s infinite ease-in-out !important;
+        }
+        #aero-agent-hud-pill {
+          position: absolute !important;
+          top: 18px !important;
+          left: 50% !important;
+          transform: translateX(-50%) !important;
+          display: inline-flex !important;
+          align-items: center !important;
+          gap: 10px !important;
+          padding: 8px 18px !important;
+          background: rgba(15, 23, 42, 0.88) !important;
+          backdrop-filter: blur(14px) !important;
+          -webkit-backdrop-filter: blur(14px) !important;
+          border: 1.5px solid rgba(56, 189, 248, 0.6) !important;
+          border-radius: 9999px !important;
+          color: #ffffff !important;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+          font-size: 13px !important;
+          font-weight: 600 !important;
+          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 0 22px rgba(56, 189, 248, 0.35) !important;
+          letter-spacing: 0.2px !important;
+          pointer-events: none !important;
+          transition: all 0.25s ease !important;
+          white-space: nowrap !important;
+          max-width: 90vw !important;
+        }
+        #aero-agent-hud-pill.paused {
+          border-color: rgba(245, 158, 11, 0.85) !important;
+          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 0 25px rgba(245, 158, 11, 0.45) !important;
+        }
+        #aero-agent-hud-dot {
+          width: 9px !important;
+          height: 9px !important;
+          border-radius: 50% !important;
+          background: #38bdf8 !important;
+          box-shadow: 0 0 10px #38bdf8, 0 0 18px #0ea5e9 !important;
+          animation: aero-hud-dot-pulse 1.2s infinite ease-in-out !important;
+          flex-shrink: 0 !important;
+        }
+        #aero-agent-hud-pill.paused #aero-agent-hud-dot {
+          background: #f59e0b !important;
+          box-shadow: 0 0 10px #f59e0b, 0 0 18px #d97706 !important;
+        }
+        #aero-agent-target-reticle {
+          position: absolute !important;
+          pointer-events: none !important;
+          z-index: 2147483642 !important;
+          border: 2.5px solid #38bdf8 !important;
+          border-radius: 6px !important;
+          box-shadow: 0 0 22px rgba(56, 189, 248, 0.85), inset 0 0 12px rgba(56, 189, 248, 0.4) !important;
+          transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
+          opacity: 0;
+          visibility: hidden;
+        }
+        #aero-agent-target-reticle.active {
+          opacity: 1 !important;
+          visibility: visible !important;
+          animation: aero-reticle-breathe 1.5s infinite alternate ease-in-out !important;
+        }
+        @keyframes aero-border-pulse {
+          0%, 100% { border-color: rgba(56, 189, 248, 0.35); }
+          50% { border-color: rgba(59, 130, 246, 0.75); }
+        }
+        @keyframes aero-hud-dot-pulse {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.35); opacity: 0.65; }
+        }
+        @keyframes aero-reticle-breathe {
+          0% { box-shadow: 0 0 16px rgba(56, 189, 248, 0.65); }
+          100% { box-shadow: 0 0 28px rgba(56, 189, 248, 0.95); }
+        }
+      `;
+      (document.head || document.documentElement).appendChild(styleEl);
+    }
+
+    hudOverlayContainer = document.createElement('div');
+    hudOverlayContainer.id = 'aero-agent-hud-overlay';
+
+    const vignette = document.createElement('div');
+    vignette.id = 'aero-agent-hud-vignette';
+
+    hudPillElement = document.createElement('div');
+    hudPillElement.id = 'aero-agent-hud-pill';
+
+    const dot = document.createElement('span');
+    dot.id = 'aero-agent-hud-dot';
+
+    hudTextSpan = document.createElement('span');
+    hudTextSpan.id = 'aero-agent-hud-text';
+    hudTextSpan.textContent = '⚡ Aero Agent Active';
+
+    hudPillElement.appendChild(dot);
+    hudPillElement.appendChild(hudTextSpan);
+
+    hudOverlayContainer.appendChild(vignette);
+    hudOverlayContainer.appendChild(hudPillElement);
+
+    hudTargetReticle = document.createElement('div');
+    hudTargetReticle.id = 'aero-agent-target-reticle';
+
+    (document.body || document.documentElement).appendChild(hudOverlayContainer);
+    (document.body || document.documentElement).appendChild(hudTargetReticle);
+  }
+
+  function showHudOverlay(text = 'Aero Agent Active', isPaused = false) {
+    try {
+      ensureHudOverlay();
+      if (!hudOverlayContainer) return;
+
+      if (hudTextSpan) {
+        hudTextSpan.textContent = text;
+      }
+      if (hudPillElement) {
+        if (isPaused) {
+          hudPillElement.classList.add('paused');
+        } else {
+          hudPillElement.classList.remove('paused');
+        }
+      }
+      hudOverlayContainer.classList.add('active');
+    } catch (e) {
+      console.warn('[Content] Error showing HUD overlay:', e);
+    }
+  }
+
+  function hideHudOverlay() {
+    try {
+      if (hudOverlayContainer) {
+        hudOverlayContainer.classList.remove('active');
+      }
+      removeTargetReticle();
+    } catch (e) { }
+  }
+
+  function highlightTargetReticle(targetNode) {
+    try {
+      ensureHudOverlay();
+      if (!hudTargetReticle || !targetNode || typeof targetNode.getBoundingClientRect !== 'function') return;
+
+      const rect = targetNode.getBoundingClientRect();
+      const scrollX = window.scrollX || window.pageXOffset || 0;
+      const scrollY = window.scrollY || window.pageYOffset || 0;
+
+      const padding = 4;
+      hudTargetReticle.style.left = `${Math.max(0, rect.left + scrollX - padding)}px`;
+      hudTargetReticle.style.top = `${Math.max(0, rect.top + scrollY - padding)}px`;
+      hudTargetReticle.style.width = `${rect.width + padding * 2}px`;
+      hudTargetReticle.style.height = `${rect.height + padding * 2}px`;
+      hudTargetReticle.classList.add('active');
+    } catch (e) { }
+  }
+
+  function removeTargetReticle() {
+    try {
+      if (hudTargetReticle) {
+        hudTargetReticle.classList.remove('active');
+      }
+    } catch (e) { }
+  }
 
   // Initialize Web Worker if possible
   try {
@@ -40,8 +240,8 @@
       isDomDirty = true;
       for (const mutation of mutations) {
         if (mutation.target && mutation.target.nodeType === Node.ELEMENT_NODE) {
-          // Ignore our own overlay badges
-          if (mutation.target.id === 'sih-tag-overlay-container' || mutation.target.classList?.contains('sih-tag-badge')) {
+          // Ignore our own overlay badges and HUD components
+          if (mutation.target.id === 'sih-tag-overlay-container' || mutation.target.id?.startsWith?.('aero-agent') || mutation.target.classList?.contains('sih-tag-badge')) {
             continue;
           }
           mutatedElementsSet.add(mutation.target);
@@ -190,7 +390,7 @@
           }
         }
       });
-    } catch(e) {}
+    } catch (e) { }
     return alerts;
   }
 
@@ -252,7 +452,7 @@
           try {
             const lbl = document.querySelector(`label[for="${CSS.escape(node.id)}"]`);
             if (lbl) associatedLabel = lbl.textContent.trim();
-          } catch(e) {}
+          } catch (e) { }
         }
         if (!associatedLabel) {
           const parentLabel = node.closest('label');
@@ -266,8 +466,8 @@
       }
 
       const ariaLabel = node.getAttribute('aria-label') ||
-                        node.getAttribute('title') ||
-                        (node.getAttribute('aria-labelledby') ? document.getElementById(node.getAttribute('aria-labelledby'))?.textContent?.trim() : null);
+        node.getAttribute('title') ||
+        (node.getAttribute('aria-labelledby') ? document.getElementById(node.getAttribute('aria-labelledby'))?.textContent?.trim() : null);
 
       const fullText = (node.textContent || '').trim();
       const finalLabelText = associatedLabel || directText || fullText || node.name || node.id || '';
@@ -431,13 +631,14 @@
 
     try {
       clickableParent.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-    } catch(e) {}
+    } catch (e) { }
     await sleep(150);
 
     const prevOutline = clickableParent.style.outline;
     const prevTransition = clickableParent.style.transition;
     clickableParent.style.transition = 'outline 0.2s ease-in-out';
     clickableParent.style.outline = '3px solid #00f2fe';
+    highlightTargetReticle(clickableParent);
 
     const rect = clickableParent.getBoundingClientRect();
     const clientX = Math.round(rect.left + rect.width / 2);
@@ -490,7 +691,7 @@
     }
 
     if (typeof clickableParent.click === 'function') {
-      try { clickableParent.click(); } catch(e) {}
+      try { clickableParent.click(); } catch (e) { }
     }
 
     if (clickableParent.type === 'radio' || clickableParent.type === 'checkbox') {
@@ -511,7 +712,7 @@
         if (clickableParent.contentWindow) {
           clickableParent.contentWindow.focus();
         }
-      } catch(e) {}
+      } catch (e) { }
     }
 
     // Direct href navigation fallback for <a> links only if genuine external link and not handled by SPA
@@ -521,34 +722,36 @@
         if (clickableParent.target === '_blank') {
           window.open(clickableParent.href, '_blank');
         }
-      } catch(e) {}
+      } catch (e) { }
     }
 
     await sleep(200);
     clickableParent.style.outline = prevOutline;
     clickableParent.style.transition = prevTransition;
+    removeTargetReticle();
   }
 
   async function simulateType(element, text) {
     if (!element) return;
     try {
       element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-    } catch(e) {}
+    } catch (e) { }
     await sleep(150);
 
     lastInteractedElement = element;
     const prevOutline = element.style.outline;
     element.style.outline = '3px solid #10b981';
+    highlightTargetReticle(element);
 
     element.focus();
     if (typeof element.click === 'function') {
-      try { element.click(); } catch(e) {}
+      try { element.click(); } catch (e) { }
     }
 
     // Check for Monaco Editor FIRST (LeetCode, VS Code web, etc.)
     const monacoContainer = (element && element.closest && element.closest('.monaco-editor'))
-                         || (element && element.classList && element.classList.contains('monaco-editor') ? element : null)
-                         || document.querySelector('.monaco-editor');
+      || (element && element.classList && element.classList.contains('monaco-editor') ? element : null)
+      || document.querySelector('.monaco-editor');
     if (monacoContainer && (window.location.hostname.includes('leetcode.com') || element.closest?.('.monaco-editor') || element.querySelector?.('.monaco-editor') || document.querySelector('.monaco-editor'))) {
       console.log('[Content] Injecting code into Monaco Editor via background MAIN world script...');
       try {
@@ -556,12 +759,13 @@
           type: 'inject_code_to_main_world',
           code: text
         });
-      } catch(e) {
+      } catch (e) {
         console.warn('[Content] Main world injection message failed:', e);
       }
 
       await sleep(400);
       element.style.outline = prevOutline;
+      removeTargetReticle();
       return;
     }
 
@@ -589,13 +793,13 @@
         try {
           document.execCommand('selectAll', false, null);
           document.execCommand('insertText', false, text);
-        } catch(e) {}
+        } catch (e) { }
       }
 
       element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
       try {
         element.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: text, inputType: 'insertText' }));
-      } catch(e) {}
+      } catch (e) { }
       element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 
       // On Gmail, do not fire blur on subject or body as it causes editor reset
@@ -623,14 +827,14 @@
           `;
           (document.head || document.documentElement).appendChild(s);
           s.remove();
-        } catch(e) {}
+        } catch (e) { }
 
         try {
           const ta = aceContainer.querySelector('textarea.ace_text-input') || element;
           ta.focus();
           document.execCommand('selectAll', false, null);
           document.execCommand('insertText', false, text);
-        } catch(e) {}
+        } catch (e) { }
 
         await sleep(300);
         return;
@@ -640,7 +844,7 @@
       const targetEditable = element.isContentEditable ? element : (element.closest('[contenteditable="true"]') || element);
       targetEditable.focus();
       if (typeof targetEditable.click === 'function') {
-        try { targetEditable.click(); } catch(e) {}
+        try { targetEditable.click(); } catch (e) { }
       }
 
       // Convert text with newlines into clean HTML paragraphs for rich text rendering
@@ -671,13 +875,14 @@
 
     await sleep(200);
     element.style.outline = prevOutline;
+    removeTargetReticle();
   }
 
   async function simulateSelect(element, value) {
     if (!element) return;
     try {
       element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-    } catch(e) {}
+    } catch (e) { }
     await sleep(150);
 
     if (element.tagName === 'SELECT') {
@@ -702,8 +907,8 @@
       let targetRadio = (element.type === 'radio' || element.type === 'checkbox')
         ? element
         : (element.querySelector?.('input[type="radio"], input[type="checkbox"], [role="radio"]') ||
-           (element.getAttribute?.('for') ? document.getElementById(element.getAttribute('for')) : null) ||
-           element.closest?.('label')?.querySelector('input[type="radio"], input[type="checkbox"], [role="radio"]'));
+          (element.getAttribute?.('for') ? document.getElementById(element.getAttribute('for')) : null) ||
+          element.closest?.('label')?.querySelector('input[type="radio"], input[type="checkbox"], [role="radio"]'));
 
       // If still not found and value is specified, search document for radio matching the value
       if (!targetRadio && valStr) {
@@ -714,7 +919,7 @@
       if (targetRadio) {
         try {
           targetRadio.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        } catch(e) {}
+        } catch (e) { }
 
         // Trigger native property setter to satisfy React/Vue/Angular synthetic value tracker
         if (targetRadio.tagName === 'INPUT') {
@@ -737,7 +942,7 @@
         targetRadio.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
 
         if (typeof targetRadio.click === 'function') {
-          try { targetRadio.click(); } catch(e) {}
+          try { targetRadio.click(); } catch (e) { }
         }
 
         targetRadio.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
@@ -745,20 +950,20 @@
 
         // Also trigger any wrapping or associated label
         const assocLabel = targetRadio.labels?.[0] || targetRadio.closest('label') ||
-                           (targetRadio.id ? document.querySelector(`label[for="${targetRadio.id}"]`) : null);
+          (targetRadio.id ? document.querySelector(`label[for="${targetRadio.id}"]`) : null);
         if (assocLabel && assocLabel !== targetRadio) {
           assocLabel.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
           if (typeof assocLabel.click === 'function') {
-            try { assocLabel.click(); } catch(e) {}
+            try { assocLabel.click(); } catch (e) { }
           }
         }
       }
 
       // Check for custom dropdown / action menu (e.g. GitHub [Public ▾], ActionMenu, Popover)
       const isDropdown = element.tagName === 'BUTTON' ||
-                         element.getAttribute('aria-haspopup') ||
-                         element.getAttribute('aria-expanded') !== null ||
-                         element.querySelector?.('svg, [class*="caret"], [class*="arrow"]');
+        element.getAttribute('aria-haspopup') ||
+        element.getAttribute('aria-expanded') !== null ||
+        element.querySelector?.('svg, [class*="caret"], [class*="arrow"]');
 
       if (isDropdown && !targetRadio) {
         console.log('[Content] Triggering custom dropdown button to select option:', valStr);
@@ -783,7 +988,7 @@
 
       if (element.tagName === 'LABEL' || element.getAttribute('role') === 'radio') {
         if (typeof element.click === 'function') {
-          try { element.click(); } catch(e) {}
+          try { element.click(); } catch (e) { }
         }
       }
 
@@ -792,7 +997,7 @@
       // Post-selection validation: ensure radio is actually checked
       if (valStr && targetRadio && targetRadio.tagName === 'INPUT' && !targetRadio.checked) {
         targetRadio.checked = true;
-        try { targetRadio.click(); } catch(e) {}
+        try { targetRadio.click(); } catch (e) { }
         targetRadio.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
       }
     }
@@ -832,9 +1037,9 @@
     if (rawTarget.includes('compose')) {
       const composeBtn = document.querySelector('div[gh="cm"], .T-I-KE, [data-tooltip="Compose"], [aria-label="Compose"], [aria-label*="Compose"]')
         || Array.from(document.querySelectorAll('button, div[role="button"], a')).find(el => {
-             const t = (el.textContent || el.getAttribute('aria-label') || '').toLowerCase().trim();
-             return t === 'compose' || t.startsWith('compose');
-           });
+          const t = (el.textContent || el.getAttribute('aria-label') || '').toLowerCase().trim();
+          return t === 'compose' || t.startsWith('compose');
+        });
       if (composeBtn) {
         console.log('[Content] Matched Compose button via direct selector:', composeBtn);
         return composeBtn;
@@ -879,18 +1084,18 @@
     if (rawTarget.includes('run') || rawTarget.includes('compile') || rawTarget.includes('execute')) {
       const runBtn = document.querySelector('button[data-e2e-locator="console-run-button"], button[data-cypress="RunCode"], #run-btn, button.run, [data-testid*="run"], button[aria-label*="run" i]')
         || Array.from(document.querySelectorAll('button')).find(btn => {
-             const t = (btn.textContent || btn.getAttribute('aria-label') || '').toLowerCase().trim();
-             return t === 'run' || t.startsWith('run') || t.includes('compile') || t.includes('execute');
-           });
+          const t = (btn.textContent || btn.getAttribute('aria-label') || '').toLowerCase().trim();
+          return t === 'run' || t.startsWith('run') || t.includes('compile') || t.includes('execute');
+        });
       if (runBtn) return runBtn;
     }
 
     if (rawTarget.includes('submit')) {
       const submitBtn = document.querySelector('button[data-e2e-locator="console-submit-button"], [data-e2e-locator*="submit"], button.bg-green-60, [data-cy="submit-code-btn"]')
         || Array.from(document.querySelectorAll('button, div[role="button"], [role="button"]')).find(btn => {
-             const t = (btn.textContent || btn.innerText || '').trim().toLowerCase();
-             return t === 'submit' || t.startsWith('submit');
-           });
+          const t = (btn.textContent || btn.innerText || '').trim().toLowerCase();
+          return t === 'submit' || t.startsWith('submit');
+        });
       if (submitBtn) return submitBtn;
     }
 
@@ -904,7 +1109,7 @@
           try {
             leetProblemLink.scrollIntoView({ behavior: 'smooth', block: 'center' });
             leetProblemLink.style.outline = '3px solid #10b981';
-          } catch(e) {}
+          } catch (e) { }
           return leetProblemLink;
         }
       }
@@ -924,9 +1129,9 @@
             try {
               topLink.style.outline = '';
               topLink.style.boxShadow = '';
-            } catch(e) {}
+            } catch (e) { }
           }, 3800);
-        } catch(e) {}
+        } catch (e) { }
         return topLink;
       }
     }
@@ -998,9 +1203,9 @@
 
       const privateRadio = document.querySelector('input[type="radio"][value="private"], input[value="private"], #repository_visibility_private, [aria-label*="Private"], input[id*="private"]')
         || Array.from(document.querySelectorAll('label, div[role="radio"], [role="radio"]')).find(el => {
-             const t = (el.textContent || '').toLowerCase();
-             return t.includes('private') && !t.includes('public');
-           });
+          const t = (el.textContent || '').toLowerCase();
+          return t.includes('private') && !t.includes('public');
+        });
       if (privateRadio) {
         console.log('[Content] Matched Private radio option:', privateRadio);
         return privateRadio;
@@ -1017,9 +1222,9 @@
 
       const publicRadio = document.querySelector('input[type="radio"][value="public"], input[value="public"], #repository_visibility_public, [aria-label*="Public"], input[id*="public"]')
         || Array.from(document.querySelectorAll('label, div[role="radio"], [role="radio"]')).find(el => {
-             const t = (el.textContent || '').toLowerCase();
-             return t.includes('public') && !t.includes('private');
-           });
+          const t = (el.textContent || '').toLowerCase();
+          return t.includes('public') && !t.includes('private');
+        });
       if (publicRadio) {
         console.log('[Content] Matched Public radio option:', publicRadio);
         return publicRadio;
@@ -1028,9 +1233,9 @@
 
     // Dedicated Search Results / Video / Dataset top item handler
     if (rawTarget.includes('search result') || rawTarget.includes('top result') ||
-        rawTarget.includes('first result') || rawTarget.includes('first dataset') ||
-        rawTarget.includes('top video') || rawTarget.includes('first video') ||
-        rawTarget.includes('first search result')) {
+      rawTarget.includes('first result') || rawTarget.includes('first dataset') ||
+      rawTarget.includes('top video') || rawTarget.includes('first video') ||
+      rawTarget.includes('first search result')) {
       const hostname = window.location.hostname;
       let topItem = null;
 
@@ -1062,6 +1267,35 @@
       }
     }
 
+    // Dedicated Google Account Chooser & Sign-In handler (supports Google One-Tap & OAuth)
+    const isLoginOrGoogleIntent = rawTarget.includes('google') || rawTarget.includes('first email') || rawTarget.includes('first account') ||
+      rawTarget.includes('sign in') || rawTarget.includes('continue with google') || rawTarget.includes('login') ||
+      rawTarget.includes('log in') || rawTarget.includes('signin');
+
+    if (isLoginOrGoogleIntent) {
+      const emailRegex = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/;
+
+      // 1. Account tile in Google One-Tap or Google Chooser
+      const accountTiles = Array.from(document.querySelectorAll('div[data-identifier], div[data-email], li[data-email], [data-profile-identifier], div[role="link"], div[role="button"], li, tr, [tabindex="0"]'));
+      for (const tile of accountTiles) {
+        const t = (tile.innerText || tile.textContent || '') + ' ' + (tile.getAttribute('data-identifier') || '') + ' ' + (tile.getAttribute('data-email') || '');
+        if (emailRegex.test(t)) {
+          console.log('[Content] Matched first Google Account in chooser/One-Tap:', tile);
+          return tile;
+        }
+      }
+
+      // 2. Google SSO button on parent page
+      const googleBtns = Array.from(document.querySelectorAll('button, a, div[role="button"], [role="button"], iframe[title*="Google"]')).filter(el => {
+        const t = (el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '').toLowerCase();
+        return (t.includes('continue with google') || t.includes('sign in with google') || t.includes('log in with google') || t.includes('signin with google') || (t.includes('google') && (t.includes('sign in') || t.includes('log in') || t.includes('continue'))));
+      });
+      if (googleBtns.length > 0) {
+        console.log('[Content] Matched Google SSO button:', googleBtns[0]);
+        return googleBtns[0];
+      }
+    }
+
     const candidates = Array.from(document.querySelectorAll('button, a, input, select, textarea, [role="button"], [role="link"], div[onclick], span[onclick], iframe, [tabindex]'));
     let best = null;
     let bestScore = 0;
@@ -1071,7 +1305,7 @@
     for (const el of candidates) {
       if (!isElementVisible(el, window.getComputedStyle(el))) continue;
       if ((step.action === 'type' || step.type === 'type') &&
-          (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button' || el.getAttribute('role') === 'link')) {
+        (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button' || el.getAttribute('role') === 'link')) {
         continue;
       }
       const text = (el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.value || '').toLowerCase();
@@ -1108,10 +1342,12 @@
     const executedResults = [];
 
     console.log(`[Content] Executing deterministic multi-action plan (${actions.length} steps)...`);
+    showHudOverlay(plan.reasoning || '⚡ Aero Agent is working...');
 
     for (let i = 0; i < actions.length; i++) {
       const step = actions[i];
       const stepIndex = step.step !== undefined ? step.step : i;
+      showHudOverlay(step.description || `Executing step ${i + 1}/${actions.length}: ${step.action || step.type}`);
       let targetNode = null;
 
       // Immediate pre-step existence check
@@ -1153,22 +1389,22 @@
 
         if (isBody) {
           const bodyEl = composeDialog.querySelector('div[role="textbox"][contenteditable="true"], div[aria-label*="Message Body" i], div[aria-label*="Message text" i], div[role="textbox"], div[g_editable="true"]')
-                      || composeDialog.querySelector('div[contenteditable="true"]')
-                      || document.querySelector('div[role="dialog"] div[contenteditable="true"]');
+            || composeDialog.querySelector('div[contenteditable="true"]')
+            || document.querySelector('div[role="dialog"] div[contenteditable="true"]');
           if (bodyEl) {
             targetNode = bodyEl;
-            try { bodyEl.click(); bodyEl.focus(); } catch(e) {}
+            try { bodyEl.click(); bodyEl.focus(); } catch (e) { }
           }
         } else if (isSubject) {
           const subjEl = composeDialog.querySelector('input[name="subjectbox"], input[placeholder*="Subject" i], input[aria-label*="Subject" i], input.aoT')
-                      || document.querySelector('input[name="subjectbox"], input[placeholder*="Subject" i]');
+            || document.querySelector('input[name="subjectbox"], input[placeholder*="Subject" i]');
           if (subjEl) {
             targetNode = subjEl;
-            try { subjEl.click(); subjEl.focus(); } catch(e) {}
+            try { subjEl.click(); subjEl.focus(); } catch (e) { }
           }
         } else if (isRecipient) {
           const toEl = composeDialog.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i], [role="combobox"] input, td.Ao input')
-                    || document.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i]');
+            || document.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i]');
           if (toEl) targetNode = toEl;
         } else if (desc.includes('compose')) {
           const composeEl = document.querySelector('div[gh="cm"], .T-I-KE, [data-tooltip="Compose"], [aria-label="Compose"], [aria-label*="Compose"]');
@@ -1249,8 +1485,8 @@
             // Actively locate and tap the search icon / submit button or trigger form.requestSubmit().
             if (keyName === 'Enter') {
               const isEmailPage = window.location.hostname.includes('mail.google.com') ||
-                                  window.location.hostname.includes('gmail.com') ||
-                                  (target && target.closest && (target.closest('[role="dialog"]') || target.closest('div[aria-label*="Compose" i]')));
+                window.location.hostname.includes('gmail.com') ||
+                (target && target.closest && (target.closest('[role="dialog"]') || target.closest('div[aria-label*="Compose" i]')));
               if (!isEmailPage) {
                 const form = (target && target.tagName === 'FORM') ? target : (target.form || target.closest?.('form'));
                 let submitBtn = form?.querySelector?.('#nav-search-submit-button, input[type="submit"], button[type="submit"], button[aria-label*="search" i], .nav-search-submit, button:has(svg)');
@@ -1268,8 +1504,8 @@
                     } else {
                       form.submit();
                     }
-                  } catch(e) {
-                    try { form.submit(); } catch(ex) {}
+                  } catch (e) {
+                    try { form.submit(); } catch (ex) { }
                   }
                 }
               }
@@ -1322,7 +1558,7 @@
         id: `ar-${Date.now()}-${stepIndex}`,
         timestamp: new Date().toISOString(),
         payload: result
-      }).catch(() => {});
+      }).catch(() => { });
 
       // Halt on failure so agent re-reasons with fresh page state
       if (!result.success) {
@@ -1333,6 +1569,7 @@
       await sleep(120);
     }
 
+    setTimeout(() => hideHudOverlay(), 600);
     return executedResults;
   }
 
@@ -1372,6 +1609,18 @@
         break;
       }
 
+      case 'show_hud_overlay': {
+        showHudOverlay(message.text || 'Aero Agent Active', !!message.paused);
+        sendResponse({ success: true });
+        break;
+      }
+
+      case 'hide_hud_overlay': {
+        hideHudOverlay();
+        sendResponse({ success: true });
+        break;
+      }
+
       case 'scan_pii': {
         const sensitive = window.PIIDetector ? window.PIIDetector.scanDOM() : [];
         sendResponse({ sensitive_nodes: sensitive });
@@ -1398,6 +1647,28 @@
         break;
       }
 
+      case 'scrape_page_content': {
+        const pageData = scrapePageContent();
+        sendResponse({ type: 'page_content', payload: pageData });
+        break;
+      }
+
+      case 'show_floating_summary': {
+        const title = message.title || message.payload?.title || 'Executive Summary';
+        const md = message.summaryMarkdown || message.summary || message.payload?.summary || message.payload?.summaryMarkdown || '';
+        showFloatingSummaryCard(title, md);
+        sendResponse({ success: true });
+        break;
+      }
+
+      case 'hide_floating_summary': {
+        hideFloatingSummaryCard();
+        sendResponse({ success: true });
+        break;
+      }
+
+
+
       default:
         sendResponse({ status: 'unhandled_message' });
     }
@@ -1417,7 +1688,7 @@
 
     try {
       if (contentSpeechRec) {
-        try { contentSpeechRec.stop(); } catch(e) {}
+        try { contentSpeechRec.stop(); } catch (e) { }
       }
 
       contentSpeechRec = new SpeechRecognition();
@@ -1443,7 +1714,7 @@
           chrome.runtime.sendMessage({
             type: 'speech_live_transcript',
             text: fullTranscript
-          }).catch(() => {});
+          }).catch(() => { });
         }
       };
 
@@ -1452,7 +1723,7 @@
           // If network glitch occurs, retry with en-US after short delay
           setTimeout(() => {
             if (isContentSpeechActive && contentSpeechRec) {
-              try { contentSpeechRec.start(); } catch(e) {}
+              try { contentSpeechRec.start(); } catch (e) { }
             }
           }, 300);
         }
@@ -1460,7 +1731,7 @@
 
       contentSpeechRec.onend = () => {
         if (isContentSpeechActive && contentSpeechRec) {
-          try { contentSpeechRec.start(); } catch(e) {}
+          try { contentSpeechRec.start(); } catch (e) { }
         }
       };
 
@@ -1474,10 +1745,251 @@
   function stopWebSpeechRecognition() {
     isContentSpeechActive = false;
     if (contentSpeechRec) {
-      try { contentSpeechRec.stop(); } catch(e) {}
+      try { contentSpeechRec.stop(); } catch (e) { }
       contentSpeechRec = null;
     }
   }
+
+  // ── DEEP CONTENT SCRAPER (Zero Hallucination, 100% Grounded Source) ────────
+  function scrapePageContent() {
+    try {
+      const clone = document.body.cloneNode(true);
+      // Strip noisy and non-text elements
+      clone.querySelectorAll('script, style, noscript, iframe, svg, nav, footer, header, [role="banner"], [role="navigation"], .ad, .ads, #ad, #cookie-banner, .cookie-banner, .toast, .popup, #aero-agent-hud-overlay, #aero-floating-summary-card').forEach(el => el.remove());
+
+      // Focus on main readable content container if present
+      const core = clone.querySelector('article, main, [role="main"], #content, .content, .post-content, .article-body, .entry-content, #wikiBody, .mw-parser-output');
+      const rawText = core ? core.innerText : clone.innerText;
+
+      const cleaned = (rawText || '')
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l.length > 0)
+        .join('\n');
+
+      return {
+        title: document.title || window.location.hostname,
+        url: window.location.href,
+        text: cleaned.slice(0, 30000)
+      };
+    } catch (e) {
+      return {
+        title: document.title || '',
+        url: window.location.href,
+        text: document.body ? document.body.innerText.slice(0, 20000) : ''
+      };
+    }
+  }
+
+  // ── FLOATING POP-UP SUMMARY MODAL ON PAGE (Dismissible via Cross ✕, Expandable ⛶) ────────
+  let floatingSummaryCard = null;
+  let isFloatingSummaryExpanded = false;
+
+  function showFloatingSummaryCard(title, markdown) {
+    hideFloatingSummaryCard();
+    isFloatingSummaryExpanded = false;
+
+    floatingSummaryCard = document.createElement('div');
+    floatingSummaryCard.id = 'aero-floating-summary-card';
+    floatingSummaryCard.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      width: 560px;
+      max-width: 92vw;
+      max-height: 88vh;
+      background: #ffffff;
+      border: 1.5px solid rgba(244, 63, 94, 0.45);
+      border-radius: 18px;
+      box-shadow: 0 25px 60px rgba(15, 23, 42, 0.45), 0 0 0 1px rgba(0,0,0,0.06);
+      z-index: 2147483647;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      animation: aeroSlideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: width 0.25s ease, max-width 0.25s ease, height 0.25s ease;
+    `;
+
+    // Convert markdown tables into styled HTML tables
+    let text = (markdown || '').replace(/((?:\|[^\n]+\|\r?\n)+)/g, (match) => {
+      const rows = match.trim().split(/\r?\n/).map(r => r.trim()).filter(Boolean);
+      if (rows.length < 2) return match;
+
+      let html = '<div style="overflow-x:auto; margin:14px 0; border:1px solid #e2e8f0; border-radius:10px;"><table style="width:100%; border-collapse:collapse; font-size:12px;">';
+      let hasHeader = false;
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (/^\|[-:\s|]+\|$/.test(row)) {
+          hasHeader = true;
+          continue;
+        }
+        const cells = row.split('|').slice(1, -1).map(c => c.trim());
+        if (i === 0 || (!hasHeader && i === 0)) {
+          html += '<thead><tr style="background:#f1f5f9; border-bottom:1.5px solid #cbd5e1;">';
+          cells.forEach(c => html += `<th style="padding:8px 10px; text-align:left; font-weight:700; color:#0f172a;">${c}</th>`);
+          html += '</tr></thead><tbody>';
+        } else {
+          const bg = i % 2 === 0 ? '#ffffff' : '#f8fafc';
+          html += `<tr style="background:${bg}; border-bottom:1px solid #f1f5f9;">`;
+          cells.forEach(c => html += `<td style="padding:7px 10px; color:#334155; line-height:1.45;">${c}</td>`);
+          html += '</tr>';
+        }
+      }
+      if (hasHeader) html += '</tbody>';
+      html += '</table></div>';
+      return html;
+    });
+
+    let bodyHtml = text
+      .replace(/^#### (.*$)/gim, '<h5 style="font-size:12.5px; font-weight:700; color:#475569; margin:12px 0 4px 0; text-transform:uppercase; letter-spacing:0.5px;">$1</h5>')
+      .replace(/^### (.*$)/gim, '<h4 style="font-size:14px; font-weight:700; color:#0f172a; margin:16px 0 6px 0; border-bottom:1px solid #f1f5f9; padding-bottom:4px;">$1</h4>')
+      .replace(/^## (.*$)/gim, '<h3 style="font-size:15px; font-weight:700; color:#0f172a; margin:18px 0 8px 0;">$1</h3>')
+      .replace(/^# (.*$)/gim, '<h2 style="font-size:16.5px; font-weight:800; color:#0f172a; margin:20px 0 10px 0;">$1</h2>')
+      .replace(/\*\*(.*?)\*\*/gim, '<strong style="color:#0f172a;">$1</strong>')
+      .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+      .replace(/`([^`]+)`/gim, '<code style="background:#f1f5f9; padding:2px 5px; border-radius:4px; font-size:11.5px; font-family:monospace; color:#e11d48;">$1</code>')
+      .replace(/^> (.*$)/gim, '<blockquote style="border-left:3.5px solid #f43f5e; margin:8px 0; padding:6px 12px; background:#fff1f2; border-radius:0 6px 6px 0; color:#881337; font-size:12px; font-style:italic;">$1</blockquote>')
+      .replace(/^- (.*$)/gim, '<li style="margin-left:16px; margin-bottom:5px; font-size:12.5px; line-height:1.55; color:#334155;">$1</li>')
+      .replace(/^\d+\.\s+(.*$)/gim, '<li style="margin-left:16px; margin-bottom:5px; font-size:12.5px; line-height:1.55; color:#334155;">$1</li>')
+      .replace(/\n\n/gim, '<br>');
+
+    const isPdfDoc = (title || '').toLowerCase().includes('.pdf') || (title || '').toLowerCase().includes('report') || (title || '').toLowerCase().includes('document');
+    const badgeText = isPdfDoc ? '📑 Attached PDF Document • Full Grounded Briefing' : 'Full-Page Grounded Analysis • Local Qwen2.5';
+
+    floatingSummaryCard.innerHTML = `
+      <div id="aero-float-header" style="padding: 14px 18px; border-bottom: 1.5px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; background: linear-gradient(135deg, #fff1f2, #f8fafc); flex-shrink: 0; cursor: grab; user-select: none;">
+        <div style="display: flex; align-items: center; gap: 10px; overflow: hidden; flex: 1;">
+          <div style="width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #f43f5e, #fb7185); display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; flex-shrink: 0; box-shadow: 0 4px 12px rgba(244,63,94,0.35);">📑</div>
+          <div style="overflow: hidden; flex: 1;">
+            <h3 style="margin: 0; font-size: 14px; font-weight: 700; color: #0f172a; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${title || 'Executive Knowledge Briefing'}</h3>
+            <p style="margin: 2px 0 0 0; font-size: 11px; color: #64748b;">${badgeText}</p>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+          <button id="aero-float-copy-btn" style="background: #ffffff; border: 1px solid #cbd5e1; color: #334155; padding: 6px 11px; border-radius: 8px; cursor: pointer; font-size: 11.5px; font-weight: 600; transition: all 0.15s ease;" title="Copy Full Summary Markdown">📋 Copy</button>
+          <button id="aero-float-expand-btn" style="background: #ffffff; border: 1px solid #cbd5e1; color: #334155; padding: 6px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 700; transition: all 0.15s ease;" title="Expand / Widescreen View">⛶</button>
+          <button id="aero-float-close-btn" style="background: #ffffff; border: 1.5px solid #cbd5e1; font-size: 16px; font-weight: 700; line-height: 1; cursor: pointer; color: #475569; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease; box-shadow: 0 1px 3px rgba(0,0,0,0.08);" title="Close and Remove (Press Esc)">✕</button>
+        </div>
+      </div>
+      <div id="aero-float-scroll-body" style="flex: 1; overflow-y: auto; padding: 20px 24px; font-size: 13px; color: #334155; line-height: 1.68;">
+        ${bodyHtml}
+      </div>
+      <div style="padding: 10px 18px; border-top: 1px solid #f1f5f9; background: #f8fafc; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #64748b; flex-shrink: 0;">
+        <span>✓ Grounded Local AI Synthesis • Drag header to move</span>
+        <button id="aero-float-close-btn2" style="background: #fee2e2; border: 1px solid #fca5a5; color: #dc2626; font-weight: 700; cursor: pointer; font-size: 11px; padding: 4px 10px; border-radius: 6px; transition: all 0.15s ease;">✕ Close Pop-up</button>
+      </div>
+    `;
+
+    document.body.appendChild(floatingSummaryCard);
+
+    // Close buttons
+    const closeBtn = floatingSummaryCard.querySelector('#aero-float-close-btn');
+    const closeBtn2 = floatingSummaryCard.querySelector('#aero-float-close-btn2');
+    const copyBtn = floatingSummaryCard.querySelector('#aero-float-copy-btn');
+    const expandBtn = floatingSummaryCard.querySelector('#aero-float-expand-btn');
+    const headerEl = floatingSummaryCard.querySelector('#aero-float-header');
+
+    if (closeBtn) {
+      closeBtn.addEventListener('mouseenter', () => {
+        closeBtn.style.background = '#fee2e2';
+        closeBtn.style.color = '#dc2626';
+        closeBtn.style.borderColor = '#fca5a5';
+      });
+      closeBtn.addEventListener('mouseleave', () => {
+        closeBtn.style.background = '#ffffff';
+        closeBtn.style.color = '#475569';
+        closeBtn.style.borderColor = '#cbd5e1';
+      });
+      closeBtn.addEventListener('click', hideFloatingSummaryCard);
+    }
+    if (closeBtn2) closeBtn2.addEventListener('click', hideFloatingSummaryCard);
+
+    // Escape key closes popup
+    const onEscapeKey = (e) => {
+      if (e.key === 'Escape') hideFloatingSummaryCard();
+    };
+    document.addEventListener('keydown', onEscapeKey);
+    floatingSummaryCard._onEscapeKey = onEscapeKey;
+
+    // Draggable header
+    if (headerEl) {
+      let isDragging = false, startX, startY, origTop, origRight;
+      headerEl.addEventListener('mousedown', (e) => {
+        if (e.target.closest('button')) return;
+        isDragging = true;
+        headerEl.style.cursor = 'grabbing';
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = floatingSummaryCard.getBoundingClientRect();
+        origTop = rect.top;
+        origRight = window.innerWidth - rect.right;
+      });
+      const onMouseMove = (e) => {
+        if (!isDragging || !floatingSummaryCard) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        floatingSummaryCard.style.top = Math.max(10, origTop + dy) + 'px';
+        floatingSummaryCard.style.right = Math.max(10, origRight - dx) + 'px';
+      };
+      const onMouseUp = () => {
+        isDragging = false;
+        if (headerEl) headerEl.style.cursor = 'grab';
+      };
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      floatingSummaryCard._dragCleanup = () => {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      };
+    }
+
+    if (expandBtn) {
+      expandBtn.addEventListener('click', () => {
+        isFloatingSummaryExpanded = !isFloatingSummaryExpanded;
+        if (isFloatingSummaryExpanded) {
+          floatingSummaryCard.style.width = '820px';
+          floatingSummaryCard.style.maxWidth = '96vw';
+          floatingSummaryCard.style.maxHeight = '92vh';
+          expandBtn.textContent = '🗗';
+          expandBtn.title = 'Restore Normal Size';
+        } else {
+          floatingSummaryCard.style.width = '560px';
+          floatingSummaryCard.style.maxWidth = '92vw';
+          floatingSummaryCard.style.maxHeight = '88vh';
+          expandBtn.textContent = '⛶';
+          expandBtn.title = 'Expand / Widescreen View';
+        }
+      });
+    }
+
+    if (copyBtn) {
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(markdown || '').then(() => {
+          copyBtn.textContent = '✓ Copied!';
+          setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 1800);
+        });
+      });
+    }
+  }
+
+  function hideFloatingSummaryCard() {
+    if (floatingSummaryCard) {
+      if (floatingSummaryCard._onEscapeKey) {
+        document.removeEventListener('keydown', floatingSummaryCard._onEscapeKey);
+      }
+      if (floatingSummaryCard._dragCleanup) {
+        floatingSummaryCard._dragCleanup();
+      }
+      floatingSummaryCard.remove();
+      floatingSummaryCard = null;
+    }
+  }
+
+  // Expose globally for direct programmatic script execution
+  window.showFloatingSummaryCard = showFloatingSummaryCard;
+  window.hideFloatingSummaryCard = hideFloatingSummaryCard;
 
   console.log('[SIH26171] Advanced Content Script initialized');
 })();

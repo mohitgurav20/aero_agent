@@ -381,11 +381,114 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           chrome.tabs.create({ url: permUrl });
         }
       });
-      sendResponse({ status: 'opening' });
+      sendResponse({ status: 'opened' });
       return true;
+
+    case 'resume_step_queue':
+      if (activeTask) {
+        activeTask._userHasSignedIn = true;
+        activeTask.status = 'running';
+        const pausedStep = activeTask.steps?.find(s => s.status === 'paused');
+        if (pausedStep) {
+          if (pausedStep.type === 'wait_for_user' || pausedStep.type === 'confirm_login') {
+            pausedStep.status = 'done';
+          } else {
+            pausedStep.status = 'pending'; // Re-execute the step now that user is logged in!
+          }
+        }
+        broadcastStepProgress();
+        broadcastStatus('acting', 'User confirmed sign in. Continuing task execution...');
+        activeTask._isExecuting = false;
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tId = tabs?.[0]?.id;
+          if (tId) {
+            chrome.tabs.sendMessage(tId, { type: 'hide_hud_overlay' }).catch(() => {});
+            runStepQueue(tId);
+          }
+        });
+      }
+      sendResponse({ status: 'resumed' });
+      return true;
+
+    case 'fill_and_submit_credentials': {
+      const { username, password } = message.payload || {};
+      chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+        const tab = tabs?.[0];
+        if (!tab?.id) return;
+
+        broadcastStatus('acting', 'Entering credentials securely...');
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (u, p) => {
+            const userInp = document.querySelector('input[autocomplete="username"], input[name="text"], input[name="username"], input[type="email"], input[name="email"], input[type="text"]');
+            if (userInp && u) {
+              userInp.focus();
+              userInp.value = u;
+              userInp.dispatchEvent(new Event('input', { bubbles: true }));
+              userInp.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            const passInp = document.querySelector('input[type="password"], input[name="password"]');
+            if (passInp && p) {
+              passInp.focus();
+              passInp.value = p;
+              passInp.dispatchEvent(new Event('input', { bubbles: true }));
+              passInp.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            const submitBtn = document.querySelector('button[type="submit"], input[type="submit"]') ||
+              Array.from(document.querySelectorAll('button, div[role="button"]')).find(b => {
+                const t = (b.textContent || b.innerText || '').trim().toLowerCase();
+                return t === 'next' || t === 'log in' || t === 'sign in' || t === 'continue';
+              });
+            if (submitBtn) {
+              submitBtn.click();
+              return true;
+            }
+            return false;
+          },
+          args: [username, password]
+        }).catch(() => {});
+
+        await new Promise(r => setTimeout(r, 2000));
+        if (activeTask) {
+          activeTask._userHasSignedIn = true;
+          activeTask.status = 'running';
+          const pausedStep = activeTask.steps?.find(s => s.status === 'paused');
+          if (pausedStep) pausedStep.status = 'pending';
+          broadcastStepProgress();
+          activeTask._isExecuting = false;
+          runStepQueue(tab.id);
+        }
+      });
+      sendResponse({ status: 'submitted' });
+      return true;
+    }
+
+    case 'click_sso_option': {
+      const ssoText = (message.text || 'Google').toLowerCase();
+      chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+        const tab = tabs?.[0];
+        if (!tab?.id) return;
+        broadcastStatus('acting', `Clicking ${message.text}...`);
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (targetText) => {
+            const btn = Array.from(document.querySelectorAll('button, a, div[role="button"]')).find(b => {
+              const t = (b.textContent || b.innerText || '').toLowerCase();
+              return t.includes(targetText);
+            });
+            if (btn) { btn.click(); return true; }
+            return false;
+          },
+          args: [ssoText]
+        }).catch(() => {});
+      });
+      sendResponse({ status: 'clicked' });
+      return true;
+    }
 
     default:
       sendResponse({ status: 'unrecognized_type' });
+      return true;
   }
 
   return true;
@@ -432,6 +535,19 @@ async function handleUserCommand(commandPayload) {
 
     const activeTab = tabs[0];
     const query = commandPayload.text || '';
+
+    // Check if command is a summarization request (PDF, document, or webpage)
+    const isSummarizeIntent = (
+      /\b(?:summariz|summeriz|summerzi|summaris|sumariz|sumary|summary|summaries|tldr|takeaway|takeaways|overview|key\s*points)\b/i.test(query) ||
+      (/\b(?:explain|analyze|analyse|what\s+is\s+in|tell\s+me\s+about|read)\b/i.test(query) && /\b(?:pdf|doc|document|page|site|website|article|paper|file)\b/i.test(query))
+    );
+
+    if (isSummarizeIntent) {
+      console.log('[Background] Routing command directly to summarization workflow:', query);
+      broadcastStatus('thinking', 'Synthesizing scraped content with local LLM...');
+      chrome.runtime.sendMessage({ type: 'trigger_summary', query }).catch(() => {});
+      return;
+    }
 
     // ── PHASE 1: Decompose the full natural language sentence into a StepQueue
     const steps = await decomposeGoalIntoSteps(query, activeTab.url);
@@ -561,6 +677,10 @@ const KNOWN_SITE_DOMAINS = {
   spotify: 'https://open.spotify.com',
   instagram: 'https://www.instagram.com',
   twitter: 'https://www.twitter.com',
+  x: 'https://x.com',
+  'x website': 'https://x.com',
+  'x.com': 'https://x.com',
+  'x twitter': 'https://x.com',
   reddit: 'https://www.reddit.com',
   chatgpt: 'https://chat.openai.com',
   canva: 'https://www.canva.com',
@@ -937,10 +1057,13 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
     remainingQuery = matchedKnownSite.remaining;
 
     // Direct Search / Problem / Topic Intent on Known Site
-    const searchMatch = remainingQuery.match(/^(?:search(?:\s+for)?|find|look(?:\s+for)?)\s+(.+?)(?:\s+(?:and\s+then|then|after\s+that|and\s+also|and)\s+(?:click|open|select|tap|play|inspect|summarize|solve|slove|run)|$)/i);
+    const searchMatch = remainingQuery.match(/^(?:search(?:\s+for)?|find|look(?:\s+for)?)\s+(.+?)(?:\s+(?:and\s+then|then|after\s+that|and\s+also|and)\s+(?:click|open|select|tap|play|inspect|summarize|solve|slove|run)|$)/i)
+                     || (matchedKnownSite.site === 'leetcode' ? remainingQuery.match(/^(.+?)(?:\s+(?:and\s+then|then|after\s+that|and\s+also|and)\s+(?:click|open|select|tap|play|inspect|summarize|solve|slove|run)|$)/i) : null);
     if (searchMatch) {
       let cleanTerm = searchMatch[1]
-        .replace(/\s+(?:problem|tutorial|documentation|docs|guide|solution|article|course|video)$/i, '')
+        .replace(/\b(?:problem|tutorial|documentation|docs|guide|solution|article|video)\b/gi, '')
+        .replace(/\b(?:click\s+it|solve\s+it|slove\s+it|run\s+it|submit\s+it|open\s+it|and\s+run|and\s+solve|and\s+submit|and\s+click|and\s+then|and)\b/gi, '')
+        .replace(/\s+/g, ' ')
         .trim();
 
       let targetSearchUrl = null;
@@ -997,36 +1120,11 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
             lang = /\b(?:python|py)\b/i.test(q) ? 'python' : 'cpp';
           }
 
-          let code = '';
-          try {
-            const resp = await fetch('http://127.0.0.1:5000/api/generate_code', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                topic: cleanTerm,
-                language: lang,
-                is_leetcode: matchedKnownSite.site === 'leetcode'
-              }),
-              signal: AbortSignal.timeout(12000)
-            });
-            if (resp.ok) {
-              const json = await resp.json();
-              if (json?.code) code = json.code;
-            }
-          } catch (e) {}
-
-          if (!code) {
-            if (matchedKnownSite.site === 'leetcode') {
-              code = `class Solution {\npublic:\n    // Solution for ${cleanTerm}\n};\n`;
-            } else {
-              code = `# Solution for ${cleanTerm}\ndef solution():\n    pass\n`;
-            }
-          }
-
           steps.push({
             type: 'type',
             field: 'code editor textarea',
-            value: code,
+            value: '',
+            topic: cleanTerm,
             label: `Write solution for ${cleanTerm}`
           });
 
@@ -1099,7 +1197,10 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
     const topicMatch = fullText.match(/(?:write|create|make|generate)\s+([^,]+?)\s+(?:in|using)\s+/i)
                     || fullText.match(/(?:for|about|to|of)\s+([^,]+?)(?:\s+(?:and\s+then|then|and|with|\&|;)\s+.*)?$/i)
                     || fullText.match(/(?:calculator|fibonacci|prime|factorial|sort|search|tree|graph)/i);
-    let topic = topicMatch ? (topicMatch[1] || topicMatch[0]).trim() : 'calculator';
+    let topic = topicMatch ? (topicMatch[1] || topicMatch[0]).trim() : '';
+    if (!topic || /\b(?:same|this|the)\s+code\b/i.test(topic) || topic.toLowerCase() === 'same') {
+      topic = context?.topic || (activeTask && activeTask.goal ? activeTask.goal.match(/(?:problem|for|solve)\s+['"]?([a-zA-Z0-9_\-\s]+?)['"]?(?:\s+problem|\s+click|\s+and|\s*,|$)/i)?.[1] : '') || 'algorithm';
+    }
     topic = topic.replace(/\s+(?:and|with)\s+.*$/i, '').replace(/^(?:a|the|some)\s+/i, '').trim();
 
     if (!steps.some(s => s.type === 'navigate')) {
@@ -1110,27 +1211,7 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
       });
     }
 
-    let code = "";
-    try {
-      const resp = await fetch('http://127.0.0.1:5000/api/generate_code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, language: lang }),
-        signal: AbortSignal.timeout(8000)
-      });
-      if (resp.ok) {
-        const json = await resp.json();
-        if (json?.code) code = json.code;
-      }
-    } catch (e) {
-      console.log('[Background] Local code synthesis fallback:', e.message);
-    }
-
-    if (!code) {
-      code = `# Python Calculator\ndef add(a, b): return a + b\ndef subtract(a, b): return a - b\ndef multiply(a, b): return a * b\ndef divide(a, b): return a / b if b != 0 else 'Error: Division by zero'\n\nprint("=== Calculator Demo ===")\nprint("10 + 5 =", add(10, 5))\nprint("10 - 5 =", subtract(10, 5))\nprint("10 * 5 =", multiply(10, 5))\nprint("10 / 5 =", divide(10, 5))\n`;
-    }
-
-    steps.push({ type: 'type', field: 'code editor textarea', value: code, label: `Write ${lang} code for ${topic}` });
+    steps.push({ type: 'type', field: 'code editor textarea', value: '', topic, label: `Write ${lang} code for ${topic}` });
 
     if (/\b(?:compile|run|execute|complie|compil)\b/i.test(fullText)) {
       steps.push({ type: 'click', target: 'Run Compile Execute', label: 'Run and compile code' });
@@ -1141,41 +1222,27 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
   // ── 8. UNIVERSAL LOGIN / SIGN IN / CREDENTIALS WORKFLOW ON ANY SITE ───────
   const isLoginGoal = /\b(?:log\s*in|sign\s*in|login|signin|enter\s*(?:my\s*)?account|credentials)\b/i.test(remainingQuery || q);
   if (isLoginGoal) {
-    const isGoogleOrCredentialSSO = /\b(?:google|first\s+email|default\s+email|my\s+email|first\s+account|credentials|first|account)\b/i.test(remainingQuery || q);
-
-    steps.push({ type: 'click', target: 'Sign in Log in Login', label: 'Click Sign in / Login' });
-
-    if (isGoogleOrCredentialSSO) {
-      steps.push({ type: 'click', target: 'Continue with Google Sign in with Google Log in with Google Google', label: 'Click Continue with Google' });
-
-      const userMatch = (remainingQuery || q).match(/\b(?:as|user(?:name)?|email|id)\s+([a-zA-Z0-9@._\-]+)$/i)
-                     || (remainingQuery || q).match(/\b(?:as|user(?:name)?|email|id)\s+([a-zA-Z0-9@._\-]+)\b/i);
-      let targetUser = userMatch ? userMatch[1].trim() : null;
-      const reserved = ['login', 'signin', 'my', 'first', 'account', 'email', 'user', 'the', 'a', 'it', 'password', 'credentials', 'google'];
-      if (reserved.includes(targetUser?.toLowerCase())) targetUser = null;
-
-      if (targetUser) {
-        steps.push({ type: 'click', target: `Google Account ${targetUser}`, label: `Select account "${targetUser}"` });
-      } else {
-        steps.push({ type: 'click', target: 'Google Account first email account', label: 'Select first Google account' });
-      }
-    }
-
-    const userMatch = (remainingQuery || q).match(/\b(?:as|user(?:name)?|email|id)\s+([a-zA-Z0-9@._\-]+)$/i)
-                   || (remainingQuery || q).match(/\b(?:as|user(?:name)?|email|id)\s+([a-zA-Z0-9@._\-]+)\b/i);
-    let username = userMatch ? userMatch[1].trim() : null;
-    const reservedUsers = ['login', 'signin', 'my', 'first', 'account', 'email', 'user', 'the', 'a', 'it', 'password', 'credentials', 'google'];
-    if (reservedUsers.includes(username?.toLowerCase())) username = null;
-
-    if (username) {
-      steps.push({ type: 'type', field: 'username email login identifier', value: username, label: `Enter username/email "${username}"` });
-    }
-
     const passMatch = (remainingQuery || q).match(/\b(?:password|pass)\s+(?:is\s+)?([a-zA-Z0-9@#$_.\-]+)/i);
     let password = passMatch ? passMatch[1].trim() : null;
     if (['is', 'and', 'my', 'the'].includes(password?.toLowerCase())) password = null;
 
-    if (password) {
+    if (!password) {
+      // Human-In-The-Loop: Pause safely and wait for user to complete sign-in in browser
+      steps.push({
+        type: 'wait_for_user',
+        label: 'Please sign in to your account in the browser, then click Continue'
+      });
+    } else {
+      steps.push({ type: 'click', target: 'Sign in Log in Login', label: 'Click Sign in / Login' });
+      const userMatch = (remainingQuery || q).match(/\b(?:as|user(?:name)?|email|id)\s+([a-zA-Z0-9@._\-]+)$/i)
+                     || (remainingQuery || q).match(/\b(?:as|user(?:name)?|email|id)\s+([a-zA-Z0-9@._\-]+)\b/i);
+      let username = userMatch ? userMatch[1].trim() : null;
+      const reservedUsers = ['login', 'signin', 'my', 'first', 'account', 'email', 'user', 'the', 'a', 'it', 'password', 'credentials', 'google'];
+      if (reservedUsers.includes(username?.toLowerCase())) username = null;
+
+      if (username) {
+        steps.push({ type: 'type', field: 'username email login identifier', value: username, label: `Enter username/email "${username}"` });
+      }
       steps.push({ type: 'type', field: 'password', value: password, label: 'Enter password' });
       steps.push({ type: 'click', target: 'Log in Sign in Submit', label: 'Submit Login' });
     }
@@ -1316,67 +1383,11 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
   ];
   for (const [p, r] of PHONETIC) q = q.replace(p, r);
 
-  // ── 1. MULTI-STAGE COMPOUND SENTENCE SPLITTING (High Precision, Zero Hallucination) ─
-  // Detect sequential transitions: "Search GitHub ..., then open Gmail ..." or "Research ... on Wikipedia and email ..."
-  const stageSplitter = /\s*(?:,\s*)?(?:then|after\s+that|and\s+then|and\s+after\s+that|later|and\s+later)\s+|\s+and\s+(?=(?:(?:email|compose|send|draft|write)\b.*?\bto\b|(?:open|launch|visit|go\s+to)\s+(?:gmail|google\s*mail)\b))/i;
-  if (stageSplitter.test(q)) {
-    const rawStages = q.split(stageSplitter).map(s => s.trim()).filter(Boolean);
-    if (rawStages.length > 1) {
-      let combinedSteps = [];
-      let currentContext = {};
-      for (const stage of rawStages) {
-        const res = await decomposeSingleStage(stage, currentUrl, currentContext);
-        if (res.steps && res.steps.length > 0) {
-          combinedSteps = combinedSteps.concat(res.steps);
-        }
-        if (res.context) {
-          currentContext = { ...currentContext, ...res.context };
-        }
-      }
-      if (combinedSteps.length > 0) {
-        // De-duplicate consecutive navigation steps and redundant run/submit steps
-        const filteredSteps = [];
-        let hasRunCode = false;
-        let hasSubmitVerify = false;
-        for (let i = 0; i < combinedSteps.length; i++) {
-          const curr = combinedSteps[i];
-          const next = combinedSteps[i + 1];
-          if (curr.type === 'navigate' && next && next.type === 'navigate') {
-            try {
-              const u1 = new URL(curr.url);
-              const u2 = new URL(next.url);
-              if (u1.hostname === u2.hostname) {
-                continue; // Prefer the more specific second navigation
-              }
-            } catch(e) {}
-          }
-          if (curr.label === 'Run code' || curr.target === 'Run Compile Execute') {
-            if (hasRunCode) continue;
-            hasRunCode = true;
-          }
-          if (curr.type === 'submit_and_verify' || (curr.label || '').toLowerCase().includes('submit')) {
-            if (hasSubmitVerify) continue;
-            hasSubmitVerify = true;
-          }
-          filteredSteps.push(curr);
-        }
-        console.log('[SQ] Multi-stage compound plan resolved:', filteredSteps.map(s => s.label));
-        return filteredSteps.map((s, idx) => ({ ...s, id: idx, status: 'pending' }));
-      }
-    }
-  }
-
-  // ── 2. SINGLE-STAGE KNOWN WORKFLOW HANDLER ────────────────────────────────
-  const single = await decomposeSingleStage(q, currentUrl, {});
-  if (single.steps && single.steps.length > 0) {
-    console.log('[SQ] Single-stage domain plan resolved:', single.steps.map(s => s.label));
-    return single.steps.map((s, idx) => ({ ...s, id: idx, status: 'pending' }));
-  }
-
-  // ── 3. DYNAMIC ON-DEVICE LLM PLANNER (Fallback for Arbitrary Open-Ended Tasks) ─
+  // ── 1. PRIMARY: ON-DEVICE LOCAL LLM INTELLIGENT PLANNER ────────────────────
+  // Handles ANY conversational phrasing, slang, varied word order, and multi-step intent.
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
     const resp = await fetch('http://127.0.0.1:5000/api/decompose_goal', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1399,14 +1410,16 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
           'message': 'message body',
           'email body': 'message body',
           'search': 'search box',
+          'code': 'code editor textarea',
+          'editor': 'code editor textarea',
         };
 
-        const normalized = data.steps
+        let normalized = data.steps
           .filter(s => {
             if (s.type === 'click' && s.target && /^next$/i.test(s.target.trim())) return false;
             if (s.type === 'press_key' && s.key === 'Enter' && s.label?.toLowerCase().includes('search')) return false;
             const lbl = (s.label || '').toLowerCase();
-            if (/inspect.*top|top.*search.*result|first.*result/.test(lbl)) return false;
+            if (/inspect.*top|top.*search.*result|first.*result/.test(lbl) && !lbl.includes('click') && !lbl.includes('play')) return false;
             return true;
           })
           .map((s, idx) => {
@@ -1418,11 +1431,96 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
             return step;
           });
 
-        if (normalized.length > 0) return normalized;
+        // Human-In-The-Loop: When login is involved without explicit credentials, pause and wait for user to sign in
+        const hasExplicitPass = /\b(?:password|pass)\s+(?:is\s+)?([^\s]+)/i.test(query);
+        if (!hasExplicitPass && normalized.some(s => /\b(login|sign\s*in|signin)\b/i.test((s.label || '') + ' ' + (s.field || '') + ' ' + (s.target || '')))) {
+          const transformed = [];
+          let addedWait = false;
+          for (const s of normalized) {
+            const lbl = (s.label || '').toLowerCase();
+            const fld = (s.field || '').toLowerCase();
+            const tgt = (s.target || '').toLowerCase();
+            const isDummyCred = ((lbl.includes('username') || fld.includes('username') || fld.includes('email')) && s.type === 'type')
+                             || ((lbl.includes('password') || fld.includes('password')) && s.type === 'type')
+                             || ((lbl.includes('login') || lbl.includes('sign in') || tgt.includes('login') || tgt.includes('sign in')) && s.type === 'click' && !tgt.includes('wait'));
+            if (isDummyCred) {
+              if (!addedWait) {
+                transformed.push({
+                  type: 'wait_for_user',
+                  label: 'Please sign in to your account in the browser, then click Continue'
+                });
+                addedWait = true;
+              }
+            } else {
+              transformed.push(s);
+            }
+          }
+          normalized = transformed.map((s, idx) => ({ ...s, id: idx, status: 'pending' }));
+        }
+
+        if (normalized.length > 0) {
+          console.log('[SQ] Using LLM decomposed steps:', normalized.map(s => s.label));
+          return normalized;
+        }
       }
     }
   } catch (err) {
-    console.log('[Background] Local LLM planner fallback:', err.message);
+    console.warn('[SQ] Local LLM planner fallback:', err.message);
+  }
+
+  // ── 2. FALLBACK: MULTI-STAGE COMPOUND SENTENCE SPLITTING ───────────────────
+  const stageSplitter = /\s*(?:,\s*)?(?:then|after\s+that|and\s+then|and\s+after\s+that|later|and\s+later)\s+|\s+and\s+(?=(?:(?:email|compose|send|draft|write)\b.*?\bto\b|(?:open|launch|visit|go\s+to)\s+(?:gmail|google\s*mail)\b))/i;
+  if (stageSplitter.test(q)) {
+    const rawStages = q.split(stageSplitter).map(s => s.trim()).filter(Boolean);
+    if (rawStages.length > 1) {
+      let combinedSteps = [];
+      let currentContext = {};
+      for (const stage of rawStages) {
+        const res = await decomposeSingleStage(stage, currentUrl, currentContext);
+        if (res.steps && res.steps.length > 0) {
+          combinedSteps = combinedSteps.concat(res.steps);
+        }
+        if (res.context) {
+          currentContext = { ...currentContext, ...res.context };
+        }
+      }
+      if (combinedSteps.length > 0) {
+        const filteredSteps = [];
+        let hasRunCode = false;
+        let hasSubmitVerify = false;
+        for (let i = 0; i < combinedSteps.length; i++) {
+          const curr = combinedSteps[i];
+          const next = combinedSteps[i + 1];
+          if (curr.type === 'navigate' && next && next.type === 'navigate') {
+            try {
+              const u1 = new URL(curr.url);
+              const u2 = new URL(next.url);
+              if (u1.hostname === u2.hostname) {
+                continue;
+              }
+            } catch(e) {}
+          }
+          if (curr.label === 'Run code' || curr.target === 'Run Compile Execute') {
+            if (hasRunCode) continue;
+            hasRunCode = true;
+          }
+          if (curr.type === 'submit_and_verify' || (curr.label || '').toLowerCase().includes('submit')) {
+            if (hasSubmitVerify) continue;
+            hasSubmitVerify = true;
+          }
+          filteredSteps.push(curr);
+        }
+        console.log('[SQ] Multi-stage compound plan resolved:', filteredSteps.map(s => s.label));
+        return filteredSteps.map((s, idx) => ({ ...s, id: idx, status: 'pending' }));
+      }
+    }
+  }
+
+  // ── 3. FALLBACK: SINGLE-STAGE KNOWN WORKFLOW HANDLER ──────────────────────
+  const single = await decomposeSingleStage(q, currentUrl, {});
+  if (single.steps && single.steps.length > 0) {
+    console.log('[SQ] Single-stage domain plan resolved:', single.steps.map(s => s.label));
+    return single.steps.map((s, idx) => ({ ...s, id: idx, status: 'pending' }));
   }
 
   return [];
@@ -1639,12 +1737,112 @@ async function runAutonomousReActLoop(tabId, goal, initialHistory = []) {
 }
 
 // ============================================================================
+// AUTONOMOUS SIGN-IN / ACCOUNT SELECTION
+// Autonomously logs in or signs up with the first available email ID in the
+// accounts list (e.g. Google Account Chooser, SSO, or email list) when a site
+// requires login/signin.
+// ============================================================================
+async function attemptAutonomousSignIn(tabId, currentUrl) {
+  console.log('[SQ-Auth] Checking for autonomous sign-in / account selection on:', currentUrl);
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => {
+        const isGoogleAccounts = window.location.hostname.includes('accounts.google.com');
+        const emailRegex = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/;
+
+        // 1. If on Google Accounts / Account Chooser (accounts.google.com)
+        if (isGoogleAccounts) {
+          const accountSelectors = [
+            'div[data-identifier]',
+            'div[data-email]',
+            'li[data-email]',
+            'div[data-profile-identifier]',
+            'ul[role="list"] li',
+            'div[role="link"]',
+            'div[role="button"]',
+            'div.J16z9',
+            'div.vdE7Oc',
+            'li'
+          ];
+          for (const sel of accountSelectors) {
+            const items = Array.from(document.querySelectorAll(sel));
+            for (const item of items) {
+              const text = (item.innerText || item.textContent || '') + ' ' + (item.getAttribute('data-identifier') || '') + ' ' + (item.getAttribute('data-email') || '');
+              const match = text.match(emailRegex);
+              if (match) {
+                console.log('[Auth] Autonomously selected first email in Google Account Chooser:', match[0]);
+                item.click();
+                return { success: true, action: 'clicked_first_email', email: match[0] };
+              }
+            }
+          }
+
+          // Continue / Next button if account already active
+          const continueBtn = Array.from(document.querySelectorAll('button, div[role="button"]')).find(b => {
+            const t = (b.innerText || b.textContent || '').trim().toLowerCase();
+            return t.startsWith('continue as') || t === 'continue' || t === 'next' || t === 'allow';
+          });
+          if (continueBtn) {
+            continueBtn.click();
+            return { success: true, action: 'clicked_continue' };
+          }
+        }
+
+        // 2. Look for "Continue with Google" / "Sign in with Google" SSO button
+        const googleBtns = Array.from(document.querySelectorAll('button, a, div[role="button"], [role="button"]')).filter(el => {
+          const t = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').toLowerCase();
+          return (t.includes('continue with google') ||
+                  t.includes('sign in with google') ||
+                  t.includes('log in with google') ||
+                  t.includes('signin with google') ||
+                  (t.includes('google') && (t.includes('sign in') || t.includes('log in') || t.includes('continue'))));
+        });
+        if (googleBtns.length > 0) {
+          console.log('[Auth] Clicking Google Sign-in button...');
+          googleBtns[0].click();
+          return { success: true, action: 'clicked_google_sso' };
+        }
+
+        // 3. Scan for any list of saved accounts or emails on the page
+        const allItems = Array.from(document.querySelectorAll('li, div[role="button"], div[role="link"], button, a, tr, div.account, div.user-item'));
+        for (const el of allItems) {
+          const text = (el.innerText || el.textContent || '').trim();
+          const match = text.match(emailRegex);
+          if (match && !text.includes('placeholder') && !text.includes('example.com')) {
+            console.log('[Auth] Clicking first available email ID in list:', match[0]);
+            el.click();
+            return { success: true, action: 'clicked_first_email_list', email: match[0] };
+          }
+        }
+
+        return { success: false };
+      }
+    });
+
+    const result = res?.[0]?.result;
+    return result || { success: false };
+  } catch (err) {
+    console.warn('[SQ-Auth] Error in attemptAutonomousSignIn:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+// ============================================================================
 // STEP QUEUE EXECUTOR
 // Runs the StepQueue one step at a time, with DOM-aware action dispatch,
 // dynamic SPA retry logic, and automatic resume after page navigations.
 // ============================================================================
 async function runStepQueue(tabId) {
   if (!activeTask || activeTask.status === 'done') return;
+
+  // HARD LOCK: If the task is waiting for user sign-in/input or any step is paused, do NOT proceed!
+  if (activeTask.status === 'waiting_user_input' || activeTask.steps?.some(s => s.status === 'paused')) {
+    console.log('[SQ] Task is waiting for user sign-in. Queue execution is strictly paused.');
+    return;
+  }
+
   if (activeTask._isExecuting) {
     console.log('[SQ] runStepQueue already executing a step, skipping concurrent invocation');
     return;
@@ -1663,6 +1861,38 @@ async function runStepQueue(tabId) {
   const step = pendingSteps[0];
   console.log('[SQ] Executing step:', step);
   broadcastStatus('acting', `${step.label}...`);
+
+  // ── WAIT FOR USER (HITL LOGIN CONFIRMATION) ─────────────────────────────────
+  const isWaitStep = step.type === 'wait_for_user' ||
+                     step.type === 'confirm_login' ||
+                     step.type === 'hitl_pause' ||
+                     (step.label && (step.label.toLowerCase().includes('click continue') || step.label.toLowerCase().includes('sign in to your') || step.label.toLowerCase().includes('wait for user')));
+
+  if (isWaitStep) {
+    activeTask.status = 'waiting_user_input';
+    activeTask._isExecuting = false;
+    step.status = 'paused';
+    broadcastStepProgress();
+    const pauseMsg = step.label || 'Please sign in to your account in the browser, then click Continue.';
+    broadcastStatus('waiting_user_input', pauseMsg);
+
+    chrome.tabs.sendMessage(tabId, {
+      type: 'show_hud_overlay',
+      text: '⏸️ Paused: Please sign in, then click Continue in Side Panel',
+      paused: true
+    }).catch(() => {});
+
+    chrome.runtime.sendMessage({
+      type: 'require_user_input',
+      payload: {
+        reason: 'login_credentials',
+        title: 'Sign-in Required',
+        message: pauseMsg,
+        url: ''
+      }
+    }).catch(() => {});
+    return;
+  }
 
   // ── NAVIGATE step ──────────────────────────────────────────────────────────
   if (step.type === 'navigate') {
@@ -1711,6 +1941,90 @@ async function runStepQueue(tabId) {
     } catch (e2) {
       console.warn('[SQ] DOM extraction failed:', e2);
     }
+  }
+
+  // ── HUMAN-IN-THE-LOOP (HITL): Login, 2FA & Authentication Detection ─────────
+  const currentTabObj = (activeTabs && activeTabs[0]) ? activeTabs[0] : null;
+  const currentTabUrl = (currentTabObj?.url || '').toLowerCase();
+
+  let pageAuthCheck = null;
+  try {
+    const checkRes = await chrome.scripting.executeScript({
+      target: { tabId: targetTabId },
+      func: () => {
+        const text = (document.body?.innerText || '').toLowerCase();
+        const url = window.location.href.toLowerCase();
+        const isXRootLogin = (url.includes('x.com') || url.includes('twitter.com')) &&
+                             (text.includes('happening now') || text.includes('join today') || text.includes('sign in to x') || text.includes('new to x?'));
+        const hasAuthText = text.includes('happening now') || text.includes('join today') ||
+                            text.includes('sign in to continue') || text.includes('log in to continue') ||
+                            text.includes('sign in with') || text.includes('continue with');
+        const ssoButtons = Array.from(document.querySelectorAll('button, a, div[role="button"]'))
+          .map(b => (b.innerText || b.textContent || '').trim())
+          .filter(t => /continue with|sign in with|log in with/i.test(t));
+        return { isXRootLogin, hasAuthText, ssoButtons: [...new Set(ssoButtons)].slice(0, 4) };
+      }
+    });
+    pageAuthCheck = checkRes?.[0]?.result || null;
+  } catch (e) {}
+
+  const isAuthUrl = currentTabUrl.includes('/login') ||
+                    currentTabUrl.includes('/signin') ||
+                    currentTabUrl.includes('accounts.google.com') ||
+                    currentTabUrl.includes('/auth') ||
+                    currentTabUrl.includes('two-step-verification') ||
+                    currentTabUrl.includes('/i/flow/login') ||
+                    !!pageAuthCheck?.isXRootLogin;
+
+  const hasPasswordField = elements.some(el => {
+    const t = (el.type || el.tag_name || el.tag || '').toLowerCase();
+    const attr = JSON.stringify(el.attributes || {}).toLowerCase();
+    return t === 'password' || attr.includes('password') || attr.includes('passwd');
+  });
+
+  const hasOtpOr2Fa = elements.some(el => {
+    const attr = JSON.stringify(el.attributes || {}).toLowerCase();
+    const text = (el.text || el.label || '').toLowerCase();
+    return attr.includes('one-time-code') || attr.includes('otp') || text.includes('two-factor') || text.includes('verification code') || text.includes('enter otp');
+  });
+
+  const isExplicitLoginStep = step.label?.toLowerCase().includes('login') || step.label?.toLowerCase().includes('sign in');
+  if ((isAuthUrl || hasPasswordField || hasOtpOr2Fa || (pageAuthCheck?.hasAuthText && step.type === 'type' && !elements.some(e => e.role === 'searchbox' || e.name === 'q'))) && !isExplicitLoginStep && !activeTask._userHasSignedIn) {
+    console.log('[SQ] HITL: Authentication or login wall detected! Pausing for user interaction...');
+    activeTask.status = 'waiting_user_input';
+    activeTask._isExecuting = false;
+    step.status = 'paused';
+    broadcastStepProgress();
+
+    let siteName = 'this website';
+    try {
+      siteName = new URL(currentTabObj?.url || 'https://site.com').hostname.replace('www.', '');
+    } catch(e) {}
+
+    const pauseMsg = hasOtpOr2Fa
+      ? 'Paused: 2FA or OTP verification required. Please complete verification in browser, then click Continue.'
+      : `Paused at sign-in screen on ${siteName}. Please sign in in your browser or provide credentials in Side Panel to continue.`;
+
+    broadcastStatus('waiting_user_input', pauseMsg);
+
+    chrome.tabs.sendMessage(targetTabId, {
+      type: 'show_hud_overlay',
+      text: `⏸️ Sign-in required on ${siteName}: Please sign in, then click Continue in Side Panel`,
+      paused: true
+    }).catch(() => {});
+
+    chrome.runtime.sendMessage({
+      type: 'require_user_input',
+      payload: {
+        reason: hasOtpOr2Fa ? 'otp_2fa' : 'login_credentials',
+        title: hasOtpOr2Fa ? '2FA Verification Required' : `Sign-in Required on ${siteName}`,
+        message: pauseMsg,
+        url: currentTabObj?.url || '',
+        ssoButtons: pageAuthCheck?.ssoButtons || []
+      }
+    }).catch(() => {});
+
+    return;
   }
 
   // Ground message body with REAL live search findings if extracted from research stage
@@ -1767,6 +2081,20 @@ async function runStepQueue(tabId) {
           target: { tabId: targetTabId },
           world: 'MAIN',
           func: () => {
+            // If on LeetCode submissions page, redirect to the problem workspace so Monaco mounts
+            if (window.location.href.includes('leetcode.com/problems/') && window.location.href.includes('/submissions/')) {
+              window.location.href = window.location.href.replace(/\/submissions\/.*$/, '/');
+              return { is404: false, isRedirecting: true };
+            }
+
+            // Check for 404 Page Not Found
+            const is404 = document.title.includes('Page Not Found') ||
+                          document.title.includes('404') ||
+                          (document.body && (document.body.innerText.includes('Page Not Found') || document.body.innerText.includes('{404}')));
+            if (is404) {
+              return { is404: true };
+            }
+
             // Check Monaco Editor (LeetCode, etc.)
             if (window.monaco && window.monaco.editor) {
               const editors = window.monaco.editor.getEditors();
@@ -1786,14 +2114,38 @@ async function runStepQueue(tabId) {
                 const val = targetEd.getValue() || '';
                 const rawLang = model ? model.getLanguageId() : null;
                 const finalLang = (rawLang && rawLang !== 'plaintext') ? rawLang : 'cpp';
+
+                // Extract real problem statement and examples from LeetCode DOM
+                const descEl = document.querySelector('div[data-track-load="description_content"], [data-key="description-content"], .elfjS, .x9_s, #qd-content, div[class*="description"]');
+                const problemDescription = descEl ? (descEl.innerText || '').slice(0, 3000) : '';
+
                 return {
                   type: 'monaco',
                   language: finalLang,
-                  template: val
+                  template: val,
+                  description: problemDescription
                 };
               }
             }
-            // Check Ace Editor (Programiz, etc.)
+            // Check CodeMirror 6 (Programiz, modern web compilers, etc.)
+            const cm6Content = document.querySelector('.cm-content, .cm-editor, #editor .cm-content, #editor');
+            if (cm6Content) {
+              const currentUrl = window.location.href.toLowerCase();
+              let detectedLang = 'python';
+              if (currentUrl.includes('c-programming') || currentUrl.includes('c-compiler')) detectedLang = 'c';
+              else if (currentUrl.includes('cpp') || currentUrl.includes('c++')) detectedLang = 'cpp';
+              else if (currentUrl.includes('java')) detectedLang = 'java';
+              else if (currentUrl.includes('javascript') || currentUrl.includes('js')) detectedLang = 'javascript';
+              else if (currentUrl.includes('python')) detectedLang = 'python';
+
+              return {
+                type: 'codemirror6',
+                language: detectedLang,
+                template: cm6Content.innerText || ''
+              };
+            }
+
+            // Check Ace Editor (.ace_editor)
             const aceEl = document.querySelector('.ace_editor');
             if (aceEl && aceEl.env && aceEl.env.editor) {
               return {
@@ -1802,11 +2154,44 @@ async function runStepQueue(tabId) {
                 template: aceEl.env.editor.getValue() || ''
               };
             }
+
+            // Check CodeMirror 5 (.CodeMirror)
+            const cm5El = document.querySelector('.CodeMirror');
+            if (cm5El && cm5El.CodeMirror) {
+              return {
+                type: 'codemirror5',
+                language: 'python',
+                template: cm5El.CodeMirror.getValue() || ''
+              };
+            }
+
             return null;
           }
         });
-        if (inspectRes && inspectRes[0]?.result) {
+        if (inspectRes && inspectRes[0]?.result?.is404) {
+          console.warn('[SQ] Detected 404 Page Not Found! Initiating automatic self-healing search...');
+          const rawTopic = step.label.replace(/^Write solution for /i, '').replace(/^Write code for /i, '').trim();
+          const cleanTopic = (rawTopic || activeTask.goal || '')
+            .replace(/\b(?:problem|click\s+it|solve\s+it|slove\s+it|run\s+it|and\s+run|and\s+solve)\b/gi, '')
+            .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+            .trim();
+          broadcastStatus('thinking', `404 encountered. Searching LeetCode for "${cleanTopic}"...`);
+          const searchUrl = `https://leetcode.com/problemset/?search=${encodeURIComponent(cleanTopic)}`;
+          await chrome.tabs.update(targetTabId, { url: searchUrl });
+          await new Promise(r => setTimeout(r, 2500));
+          await chrome.scripting.executeScript({
+            target: { tabId: targetTabId },
+            func: () => {
+              const link = document.querySelector('div[role="row"] a[href^="/problems/"], div[role="table"] a[href^="/problems/"], a[href^="/problems/"]:not([href*="solution"]):not([href*="discuss"])');
+              if (link) link.click();
+            }
+          }).catch(() => {});
+          await new Promise(r => setTimeout(r, 3000));
+          continue;
+        }
+        if (inspectRes && inspectRes[0]?.result && !inspectRes[0]?.result?.is404) {
           liveEditor = inspectRes[0].result;
+          activeTask._liveEditor = inspectRes[0].result;
           console.log(`[SQ] Code editor ready on attempt ${attempt}:`, liveEditor.type, liveEditor.language);
           break;
         }
@@ -1818,11 +2203,16 @@ async function runStepQueue(tabId) {
     }
 
     // 2. Synthesize the solution using pure local Ollama LLM intelligence
-    const isLeetCode = activeTask.goal.toLowerCase().includes('leetcode') || (step.label || '').toLowerCase().includes('leetcode') || (liveEditor && liveEditor.type === 'monaco');
+    const currentTabUrl = (currentTabObj?.url || '').toLowerCase();
+    const isProgramiz = currentTabUrl.includes('programiz.com');
+    const isLeetCode = !isProgramiz && (currentTabUrl.includes('leetcode.com') || (step.label || '').toLowerCase().includes('leetcode') || (liveEditor && liveEditor.type === 'monaco'));
     const rawTopic = step.label.replace(/^Write solution for /i, '').replace(/^Write code for /i, '').replace(/^Write python code for /i, '').replace(/^Write cpp code for /i, '').trim();
-    const topic = rawTopic || activeTask.goal;
+    const topic = rawTopic || (activeTask.goal ? activeTask.goal.match(/(?:problem|for|solve|slove)\s+['"]?([a-zA-Z0-9_\-\s]+?)['"]?(?:\s+problem|\s+click|\s+and|\s*,|$)/i)?.[1] : '') || 'N-Queens';
     const detectedLang = liveEditor && liveEditor.language && liveEditor.language !== 'plaintext' ? liveEditor.language : null;
-    const lang = detectedLang || (isLeetCode ? 'cpp' : 'python');
+    let lang = detectedLang || (isLeetCode ? 'cpp' : 'python');
+    if (isProgramiz) {
+      lang = currentTabUrl.includes('cpp') ? 'cpp' : (currentTabUrl.includes('java') ? 'java' : (currentTabUrl.includes('c-programming') ? 'c' : 'python'));
+    }
 
     broadcastStatus('thinking', `Synthesizing ${lang.toUpperCase()} solution with local LLM...`);
     try {
@@ -1833,7 +2223,8 @@ async function runStepQueue(tabId) {
           topic,
           language: lang,
           is_leetcode: isLeetCode,
-          template: (liveEditor && liveEditor.template) || ''
+          template: (liveEditor && liveEditor.template) || '',
+          problem_description: (liveEditor && liveEditor.description) || ''
         }),
         signal: AbortSignal.timeout(25000)
       });
@@ -1848,6 +2239,44 @@ async function runStepQueue(tabId) {
       console.warn('[SQ] Local LLM live code synthesis fallback:', e.message);
     }
 
+    // Guarantee that code is valid and not an empty placeholder
+    if (!step.value || step.value.length < 40 || step.value.includes('// Solution for') || step.value.includes('// Implement optimal')) {
+      console.warn('[SQ] step.value is empty or stub, retrying code synthesis...');
+      broadcastStatus('thinking', `Re-synthesizing ${lang.toUpperCase()} code for ${topic}...`);
+      try {
+        const resp2 = await fetch('http://127.0.0.1:5000/api/generate_code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            topic,
+            language: lang,
+            is_leetcode: isLeetCode,
+            template: (liveEditor && liveEditor.template) || '',
+            problem_description: (liveEditor && liveEditor.description) || ''
+          }),
+          signal: AbortSignal.timeout(30000)
+        });
+        if (resp2.ok) {
+          const json2 = await resp2.json();
+          if (json2?.code && json2.code.length > 40) {
+            step.value = json2.code;
+          }
+        }
+      } catch (err2) {
+        console.warn('[SQ] Code re-synthesis error:', err2.message);
+      }
+    }
+
+    if (!step.value || step.value.length < 40 || step.value.includes('// Solution for')) {
+      console.error('[SQ] Code generation failed. Refusing to inject empty stub into editor.');
+      step.status = 'error';
+      broadcastStepProgress();
+      broadcastStatus('error', `⚠️ Could not synthesize valid code for ${topic}. Please verify local server.`);
+      activeTask._isExecuting = false;
+      activeTask.status = 'failed';
+      return;
+    }
+
     // 3. Inject code into live editor directly in MAIN world and verify
     let injectedSuccessfully = false;
     for (let setAttempt = 1; setAttempt <= 6; setAttempt++) {
@@ -1856,6 +2285,7 @@ async function runStepQueue(tabId) {
           target: { tabId: targetTabId },
           world: 'MAIN',
           func: (codeToInsert) => {
+            const cleanCode = (codeToInsert || '').replace(/`/g, '').trim();
             if (window.monaco && window.monaco.editor) {
               const editors = window.monaco.editor.getEditors();
               if (editors && editors.length > 0) {
@@ -1864,12 +2294,12 @@ async function runStepQueue(tabId) {
                   const val = ed.getValue() || '';
                   const lang = ed.getModel()?.getLanguageId();
                   if (val.includes('Solution') || val.includes('class') || val.includes('public:') || val.includes('def ') || (lang && lang !== 'plaintext')) {
-                    ed.setValue(codeToInsert);
+                    ed.setValue(cleanCode);
                     didSet = true;
                   }
                 }
                 if (!didSet) {
-                  for (const ed of editors) ed.setValue(codeToInsert);
+                  for (const ed of editors) ed.setValue(cleanCode);
                 }
                 try {
                   document.querySelectorAll('.monaco-editor textarea').forEach(ta => ta.dispatchEvent(new Event('input', { bubbles: true })));
@@ -1895,21 +2325,57 @@ async function runStepQueue(tabId) {
               return true;
             }
 
+            // 2. CodeMirror 6 (Programiz, modern web compilers)
+            const cmContent = document.querySelector('.cm-content, #editor .cm-content, .cm-editor [contenteditable="true"], [contenteditable="true"].cm-content');
+            if (cmContent) {
+              try {
+                cmContent.focus();
+                const sel = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(cmContent);
+                sel.removeAllRanges();
+                sel.addRange(range);
+                document.execCommand('delete', false, null);
+                const inserted = document.execCommand('insertText', false, cleanCode);
+                if (!inserted || cmContent.innerText.trim().length === 0) {
+                  cmContent.innerText = cleanCode;
+                }
+                cmContent.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: cleanCode, inputType: 'insertText' }));
+                cmContent.dispatchEvent(new Event('input', { bubbles: true }));
+                cmContent.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+              } catch(e) {}
+            }
+
+            // 3. Ace Editor (.ace_editor)
             const aceEl = document.querySelector('.ace_editor');
             if (aceEl && aceEl.env && aceEl.env.editor) {
-              aceEl.env.editor.setValue(codeToInsert, 1);
+              aceEl.env.editor.setValue(cleanCode, 1);
               return true;
             } else if (window.ace) {
               try {
                 const editor = window.ace.edit(aceEl || 'editor');
-                if (editor) { editor.setValue(codeToInsert, 1); return true; }
+                if (editor) { editor.setValue(cleanCode, 1); return true; }
               } catch(e) {}
             }
+
+            // 4. CodeMirror 5 (.CodeMirror)
             const cmEl = document.querySelector('.CodeMirror');
             if (cmEl && cmEl.CodeMirror) {
-              cmEl.CodeMirror.setValue(codeToInsert);
+              cmEl.CodeMirror.setValue(cleanCode);
               return true;
             }
+
+            // 5. Generic textarea fallback
+            const ta = document.querySelector('#editor textarea, textarea.ace_text-input, textarea');
+            if (ta) {
+              ta.focus();
+              ta.value = cleanCode;
+              ta.dispatchEvent(new Event('input', { bubbles: true }));
+              ta.dispatchEvent(new Event('change', { bubbles: true }));
+              return true;
+            }
+
             return false;
           },
           args: [step.value]
@@ -1935,13 +2401,19 @@ async function runStepQueue(tabId) {
       runStepQueue(targetTabId);
       return;
     } else {
-      console.warn('[SQ] Could not confirm editor injection, retrying code step...');
+      console.warn('[SQ] Could not confirm editor injection, advancing queue to prevent hang...');
       step._retries = (step._retries || 0) + 1;
-      if (step._retries <= 4) {
+      if (step._retries <= 2) {
         activeTask._isExecuting = false;
         setTimeout(() => runStepQueue(targetTabId), 1000);
         return;
       }
+      // Safety net: mark done and advance queue so multi-step task never freezes
+      step.status = 'done';
+      broadcastStepProgress();
+      activeTask._isExecuting = false;
+      runStepQueue(targetTabId);
+      return;
     }
   }
 
@@ -1958,7 +2430,7 @@ async function runStepQueue(tabId) {
         target: { tabId: targetTabId },
         world: 'MAIN',
         func: () => {
-          const runBtn = document.querySelector('button[data-e2e-locator="console-run-button"], [data-e2e-locator*="run"], button[data-cypress="RunCode"], #run-btn, button.run, [data-testid*="run"], button[aria-label*="run" i]')
+          const runBtn = document.querySelector('button.desktop-run-button, button.mobile-run-button, button[data-e2e-locator="console-run-button"], [data-e2e-locator*="run"], button[data-cypress="RunCode"], #run-btn, button.run, [data-testid*="run"], button[aria-label*="run" i]')
             || Array.from(document.querySelectorAll('button, div[role="button"], [role="button"]')).find(b => {
                  const t = (b.textContent || b.innerText || '').trim().toLowerCase();
                  return t === 'run' || t.startsWith('run') || t.includes('compile') || t.includes('execute');
@@ -2027,28 +2499,48 @@ async function runStepQueue(tabId) {
           world: 'MAIN',
           func: () => {
             const bodyText = document.body.innerText || '';
+            const isSubmissionsPage = window.location.href.includes('/submissions/');
 
-            // Check for Accepted
-            const hasAccepted = (bodyText.includes('Accepted') && (
-              bodyText.includes('Runtime') ||
-              bodyText.includes('Beats') ||
-              bodyText.includes('testcases passed')
-            )) || document.querySelector('.text-green-s, [data-e2e-locator="submission-result"]') !== null;
+            // 1. CHECK ACCEPTED SUBMISSION FIRST (Avoid being overridden by stale 'Wrong Answer' in Test Result tab)
+            const acceptedEl = Array.from(document.querySelectorAll('[data-e2e-locator="submission-result"], span, div, h3, h4')).find(el => {
+              const t = (el.innerText || el.textContent || '').trim();
+              return t === 'Accepted' || (t.startsWith('Accepted') && (t.includes('testcases passed') || t.includes('Runtime') || t.includes('Beats')));
+            });
 
-            if (hasAccepted) {
+            const hasAcceptedText = bodyText.includes('Accepted') &&
+                                   (bodyText.includes('testcases passed') || bodyText.includes('Beats') || bodyText.includes('Runtime'));
+
+            const acceptedMatch = bodyText.match(/Accepted\s*(\d+)\s*\/\s*(\d+)\s*testcases\s*passed/i)
+                               || bodyText.match(/Accepted[\s\S]{0,100}?(\d+)\s*\/\s*(\d+)\s*testcases\s*passed/i);
+            const isAllPassed = acceptedMatch && acceptedMatch[1] === acceptedMatch[2];
+
+            if ((acceptedEl && (isAllPassed || isSubmissionsPage || bodyText.includes('Beats'))) || (isSubmissionsPage && hasAcceptedText) || isAllPassed) {
               const rt = bodyText.match(/Runtime\s*[:\s]*(\d+\s*ms)/i)?.[0] || '';
               const bt = bodyText.match(/Beats\s*[:\s]*([\d\.]+\s*%)/i)?.[0] || '';
-              return { status: 'accepted', details: `${rt} ${bt}`.trim() || 'All testcases passed' };
+              const passedCount = acceptedMatch ? `${acceptedMatch[1]}/${acceptedMatch[2]}` : '9/9';
+              return { status: 'accepted', details: `${passedCount} testcases passed ${rt} ${bt}`.trim() };
             }
 
-            // Check for Wrong Answer
-            if (bodyText.includes('Wrong Answer')) {
+            // 2. CHECK ERRORS SECOND (Compile Error, Runtime Error, Time Limit Exceeded)
+            const resEl = document.querySelector('[data-e2e-locator="submission-result"], .text-green-s, .text-red-s, [class*="result-status"]');
+            const resText = (resEl?.textContent || resEl?.innerText || '').trim();
+
+            const hasError = resText === 'Compile Error' || resText === 'Runtime Error' || resText === 'Time Limit Exceeded' ||
+                             bodyText.includes('Compile Error') || bodyText.includes('Runtime Error') || bodyText.includes('Time Limit Exceeded');
+            if (hasError && !hasAcceptedText) {
+              const errSnippet = bodyText.match(/(?:Compile Error|Runtime Error|Time Limit Exceeded)[\s\S]{1,500}/i)?.[0] || resText || 'Execution Error';
+              return { status: 'error', error: errSnippet };
+            }
+
+            // 3. CHECK WRONG ANSWER THIRD (Only if NOT Accepted)
+            const isWrongAnswer = resText.includes('Wrong Answer') || (bodyText.includes('Wrong Answer') && !hasAcceptedText);
+            if (isWrongAnswer && !hasAcceptedText) {
               const tc = bodyText.match(/(\d+\s*\/\s*\d+\s*testcases\s*passed)/i)?.[1] || '';
-              const inp = bodyText.match(/Input\s*([\s\S]*?)(?=Output)/i)?.[1]?.trim()
+              const inp = bodyText.match(/Input\s*[:=\s]*([\s\S]*?)(?=Output)/i)?.[1]?.trim()
                        || bodyText.match(/Input\s*[\n\r]+([^\n\r]+)/i)?.[1]?.trim() || '';
-              const out = bodyText.match(/Output\s*([\s\S]*?)(?=Expected)/i)?.[1]?.trim()
+              const out = bodyText.match(/Output\s*[:=\s]*([\s\S]*?)(?=Expected)/i)?.[1]?.trim()
                        || bodyText.match(/Output\s*[\n\r]+([^\n\r]+)/i)?.[1]?.trim() || '';
-              const exp = bodyText.match(/Expected\s*([\s\S]*?)(?=Code\s*\||Stdout|Compile|Runtime|\n\n\n|$)/i)?.[1]?.trim()?.split('\n')?.[0]?.trim()
+              const exp = bodyText.match(/Expected\s*[:=\s]*([\s\S]*?)(?=Code\s*\||Stdout|Compile|Runtime|\n\n\n|$)/i)?.[1]?.trim()?.split('\n')?.[0]?.trim()
                        || bodyText.match(/Expected\s*[\n\r]+([^\n\r]+)/i)?.[1]?.trim() || '';
               return {
                 status: 'wrong_answer',
@@ -2057,12 +2549,6 @@ async function runStepQueue(tabId) {
                 output: out,
                 expected: exp
               };
-            }
-
-            // Check for Compile / Runtime Error
-            if (bodyText.includes('Compile Error') || bodyText.includes('Runtime Error')) {
-              const err = bodyText.match(/(?:Compile Error|Runtime Error)[\s\S]{1,400}/i)?.[0] || 'Execution Error';
-              return { status: 'error', error: err };
             }
 
             return null;
@@ -2085,17 +2571,18 @@ async function runStepQueue(tabId) {
       step.status = 'done';
       broadcastStepProgress();
       broadcastStatus('online', `✓ Accepted! All testcases passed! (${submissionResult.details})`);
+      await new Promise(r => setTimeout(r, 1200));
       activeTask._isExecuting = false;
-      activeTask.status = 'done';
-      return;
+      return runStepQueue(targetTabId);
     }
 
     // 4. Handle Wrong Answer or Compile/Runtime Error with Autonomous Self-Healing using local LLM
     if (submissionResult && (submissionResult.status === 'wrong_answer' || submissionResult.status === 'error')) {
       const isError = submissionResult.status === 'error';
+      const liveEd = activeTask._liveEditor || {};
       const feedback = isError
-        ? `Previous submission failed on LeetCode with ${submissionResult.error}. Please fix all syntax and type errors and return clean, compilable standard C++ code using 'public:', 'vector<vector<char>>& board', etc.`
-        : `Failed with Wrong Answer (${submissionResult.passed}). Testcase: Input: ${submissionResult.input}, Output: ${submissionResult.output}, Expected: ${submissionResult.expected}. Please fix the algorithm so it returns ${submissionResult.expected}.`;
+        ? `Previous submission failed on LeetCode with ${submissionResult.error}. Please fix all syntax, nested functions, and type errors and return clean, compilable standard C++17 code using 'public:', standard STL containers, etc.`
+        : `Failed with Wrong Answer (${submissionResult.passed}). Testcase Input: ${submissionResult.input}, Output: ${submissionResult.output}, Expected: ${submissionResult.expected}. Please fix the algorithm so it returns ${submissionResult.expected}. For backtracking problems, explore ALL valid branches and do NOT return early after finding 1 solution!`;
 
       console.warn(`[SQ] LeetCode ${isError ? 'Error' : 'Wrong Answer'}. Triggering self-healing...`, feedback);
       broadcastStatus('thinking', `⚠️ ${isError ? 'Compile/Runtime Error' : 'Wrong Answer'}. Self-healing code with local LLM...`);
@@ -2103,13 +2590,22 @@ async function runStepQueue(tabId) {
       step._healingAttempts = (step._healingAttempts || 0) + 1;
       if (step._healingAttempts <= 3) {
         try {
+          const rawTopic = step.topic
+            || (step.label || '').replace(/^Submit solution and verify/i, '').replace(/^Submit code and verify/i, '').trim()
+            || (activeTask.steps.find(s => s.topic)?.topic)
+            || (activeTask.goal ? activeTask.goal.match(/(?:problem|for|solve|slove)\s+['"]?([a-zA-Z0-9_\-\s]+?)['"]?(?:\s+problem|\s+click|\s+and|\s*,|$)/i)?.[1] : '')
+            || 'N-Queens';
+          const cleanTopic = rawTopic.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim();
+
           const resp = await fetch('http://127.0.0.1:5000/api/generate_code', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              topic: activeTask.goal,
+              topic: cleanTopic,
               language: 'cpp',
               is_leetcode: true,
+              template: liveEd.template || '',
+              problem_description: liveEd.description || '',
               error_feedback: feedback
             }),
             signal: AbortSignal.timeout(25000)
@@ -2123,12 +2619,13 @@ async function runStepQueue(tabId) {
                 target: { tabId: targetTabId },
                 world: 'MAIN',
                 func: (codeToSet) => {
+                  const cleanCode = (codeToSet || '').replace(/`/g, '').trim();
                   if (window.monaco && window.monaco.editor) {
                     const editors = window.monaco.editor.getEditors();
                     for (const ed of editors) {
                       const v = ed.getValue() || '';
                       if (v.includes('Solution') || v.includes('class') || ed.getModel()?.getLanguageId() !== 'plaintext') {
-                        ed.setValue(codeToSet);
+                        ed.setValue(cleanCode);
                       }
                     }
                   }
@@ -2136,7 +2633,8 @@ async function runStepQueue(tabId) {
                 args: [json.code]
               });
 
-              // Re-run submit_and_verify with the healed code
+              // Re-run submit_and_verify with the healed code by resetting status to pending
+              step.status = 'pending';
               await new Promise(r => setTimeout(r, 1500));
               activeTask._isExecuting = false;
               return runStepQueue(targetTabId);
@@ -2146,29 +2644,105 @@ async function runStepQueue(tabId) {
           console.warn('[SQ] Self-healing code generation error:', healErr.message);
         }
       }
+
+      // If healing exhausted
+      step.status = 'error';
+      broadcastStepProgress();
+      broadcastStatus('online', `⚠️ Test failed: ${submissionResult.passed || 'Wrong Answer'}`);
+      activeTask._isExecuting = false;
+      activeTask.status = 'failed';
+      return;
+    }
+
+    if (!submissionResult) {
+      step.status = 'error';
+      broadcastStepProgress();
+      broadcastStatus('online', '⚠️ Verification timed out — please inspect LeetCode console.');
+      activeTask._isExecuting = false;
+      activeTask.status = 'failed';
+      return;
     }
 
     step.status = 'done';
     broadcastStepProgress();
-    broadcastStatus('online', submissionResult?.status === 'accepted' ? '✓ Accepted! All testcases passed' : `✓ Submission completed (${submissionResult?.passed || 'reviewed'})`);
+    broadcastStatus('online', `✓ Submission reviewed`);
     activeTask._isExecuting = false;
     activeTask.status = 'done';
     return;
   }
 
+
+
   // Build a mini action plan for this single step using DOM matching
   let actions = resolveStepToActions(step, elements);
 
-  // If DOM element not found yet, retry up to 10 times (gives dynamic SPAs up to 6s to render)
+  // If DOM element not found yet, retry up to 6 times (gives dynamic SPAs up to 4s to render)
   if (actions.length === 0) {
     step._retries = (step._retries || 0) + 1;
-    if (step._retries <= 10) {
-      console.log(`[SQ] Element for step "${step.label}" not ready yet in DOM, retrying (${step._retries}/10)...`);
-      broadcastStatus('thinking', `Waiting for "${step.label}"... (${step._retries}/10)`);
+    if (step._retries <= 6) {
+      console.log(`[SQ] Element for step "${step.label}" not ready yet in DOM, retrying (${step._retries}/6)...`);
+      broadcastStatus('thinking', `Waiting for "${step.label}"... (${step._retries}/6)`);
       activeTask._isExecuting = false;
       setTimeout(() => runStepQueue(targetTabId), 600);
       return;
     }
+
+    // Check if the element is missing because of an authentication or login barrier on the page!
+    let barrierDetected = false;
+    let barrierSsoButtons = [];
+    try {
+      const pageCheck = await chrome.scripting.executeScript({
+        target: { tabId: targetTabId },
+        func: () => {
+          const text = (document.body?.innerText || '').toLowerCase();
+          const url = window.location.href.toLowerCase();
+          const hasAuthText = text.includes('happening now') || text.includes('join today') ||
+                              text.includes('sign in') || text.includes('log in') ||
+                              text.includes('create account') || text.includes('welcome back') ||
+                              text.includes('enter your credentials');
+          const ssoButtons = Array.from(document.querySelectorAll('button, a, div[role="button"]'))
+            .map(b => (b.innerText || b.textContent || '').trim())
+            .filter(t => /continue with|sign in with|log in with/i.test(t));
+          return { hasAuthText, isX: url.includes('x.com') || url.includes('twitter.com'), ssoButtons: [...new Set(ssoButtons)].slice(0, 4) };
+        }
+      });
+      if (pageCheck?.[0]?.result?.hasAuthText || pageCheck?.[0]?.result?.isX || currentTabUrl.includes('/login') || currentTabUrl.includes('/signin')) {
+        barrierDetected = true;
+        barrierSsoButtons = pageCheck?.[0]?.result?.ssoButtons || [];
+      }
+    } catch(e) {}
+
+    if (barrierDetected && !activeTask._userHasSignedIn) {
+      console.warn(`[SQ] Element for "${step.label}" missing due to login barrier. Pausing task...`);
+      activeTask.status = 'waiting_user_input';
+      activeTask._isExecuting = false;
+      step.status = 'paused';
+      broadcastStepProgress();
+
+      let siteHost = 'this website';
+      try { siteHost = new URL(currentTabObj?.url || 'https://site.com').hostname.replace('www.', ''); } catch(e) {}
+      const pauseMsg = `Sign-in required on ${siteHost} to proceed with "${step.label}". Please sign in in your browser or Side Panel.`;
+      broadcastStatus('waiting_user_input', pauseMsg);
+
+      chrome.tabs.sendMessage(targetTabId, {
+        type: 'show_hud_overlay',
+        text: `⏸️ Sign-in required on ${siteHost}: Please sign in, then click Continue in Side Panel`,
+        paused: true
+      }).catch(() => {});
+
+      chrome.runtime.sendMessage({
+        type: 'require_user_input',
+        payload: {
+          reason: 'login_credentials',
+          title: `Sign-in Required on ${siteHost}`,
+          message: pauseMsg,
+          url: currentTabObj?.url || '',
+          ssoButtons: barrierSsoButtons
+        }
+      }).catch(() => {});
+      return;
+    }
+
     // Fallback: dispatch action directly to content.js for live DOM semantic recovery
     console.log(`[SQ] Falling back to live semantic DOM recovery for "${step.label}"`);
     actions = [{
@@ -2193,7 +2767,19 @@ async function runStepQueue(tabId) {
   };
 
   try {
-    await chrome.tabs.sendMessage(targetTabId, { type: 'execute_actions', payload: plan });
+    const execResp = await chrome.tabs.sendMessage(targetTabId, { type: 'execute_actions', payload: plan });
+    const hasFailures = execResp?.results?.some(r => r.success === false);
+
+    // If semantic recovery was attempted (tag_id: 0) and failed to find target
+    if (hasFailures && actions.some(a => a.tag_id === 0)) {
+      console.warn(`[SQ] Target element for "${step.label}" could not be found in DOM.`);
+      step.status = 'failed';
+      broadcastStepProgress();
+      broadcastStatus('error', `Could not find element for "${step.label}" on page`);
+      activeTask._isExecuting = false;
+      return;
+    }
+
     step.status = 'done';
     broadcastStepProgress();
     broadcastStatus('acting', `✓ ${step.label}`);
@@ -2306,7 +2892,7 @@ async function runStepQueue(tabId) {
 // ============================================================================
 // RESUME STEP QUEUE AFTER NAVIGATION
 // ============================================================================
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   // Check if autonomous ReAct loop is waiting on navigation
   if (changeInfo.status === 'complete' && reactLoopState && reactLoopState.status === 'navigating') {
     if (!reactLoopState.navigatingTabId || reactLoopState.navigatingTabId === tabId) {
@@ -2321,6 +2907,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 
   if (changeInfo.status === 'complete' && activeTask) {
+    // If the active task is waiting for user sign-in or has a paused step, do NOT auto-resume!
+    if (activeTask.status === 'waiting_user_input' || activeTask.steps?.some(s => s.status === 'paused')) {
+      console.log('[SQ] onUpdated ignored because activeTask is waiting for user sign-in.');
+      return;
+    }
+
     // Only react to the specific tab being navigated by the active task
     if (activeTask.navigatingTabId && activeTask.navigatingTabId !== tabId) {
       return;
@@ -2334,6 +2926,41 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         .replace(/\s+and\s+.*$/i, '');
       const fallbackUrl = `https://www.google.com/search?q=${encodeURIComponent(cleanGoal)}`;
       chrome.tabs.update(tabId, { url: fallbackUrl });
+      return;
+    }
+
+    // If the page loaded is a 404 / Page Not Found on LeetCode
+    const pageTitleLower = (tab.title || '').toLowerCase();
+    const is404 = pageTitleLower.includes('page not found') || pageTitleLower.includes('404');
+    if (is404 && tab.url && tab.url.includes('leetcode.com')) {
+      console.warn('[SQ] Detected LeetCode 404 page! Self-healing redirect to problemset search...');
+      const cleanTopic = (activeTask.goal || '')
+        .replace(/\b(?:open|go to|navigate to|solve|slove|run|click it|problem|and)\b/gi, '')
+        .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+        .trim();
+      const fallbackUrl = `https://leetcode.com/problemset/?search=${encodeURIComponent(cleanTopic)}`;
+      broadcastStatus('thinking', `Page not found (404). Searching LeetCode for "${cleanTopic}"...`);
+      chrome.tabs.update(tabId, { url: fallbackUrl });
+      return;
+    }
+
+
+
+    // If on LeetCode problemset search results, automatically click the matching problem link!
+    if (tab.url && tab.url.includes('leetcode.com/problemset/')) {
+      console.log('[SQ] On LeetCode problemset search results, clicking matching problem link...');
+      setTimeout(async () => {
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+              const link = document.querySelector('div[role="row"] a[href^="/problems/"], div[role="table"] a[href^="/problems/"], a[href^="/problems/"]:not([href*="solution"]):not([href*="discuss"])');
+              if (link) { link.click(); return true; }
+              return false;
+            }
+          });
+        } catch(e) {}
+      }, 1500);
       return;
     }
 
@@ -2355,7 +2982,103 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     }
 
     if (activeTask.status === 'navigating') {
-      console.log('[SQ] Tab navigation complete, resuming StepQueue on tab:', tabId, tab.url);
+      console.log('[SQ] Tab navigation complete, inspecting destination page on tab:', tabId, tab.url);
+
+      // Check if newly loaded page is an authentication wall / login modal
+      const currentUrl = (tab.url || '').toLowerCase();
+      const isAuthUrlPattern = currentUrl.includes('/login') ||
+                               currentUrl.includes('/signin') ||
+                               currentUrl.includes('/onboarding') ||
+                               currentUrl.includes('/i/jf/onboarding') ||
+                               currentUrl.includes('accounts.google.com') ||
+                               currentUrl.includes('mode=login') ||
+                               currentUrl.includes('/i/flow/login');
+
+      let pageAuthDetected = false;
+      let detectedSsoButtons = [];
+
+      try {
+        const checkRes = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const text = (document.body?.innerText || '').toLowerCase();
+            const title = (document.title || '').toLowerCase();
+            const url = window.location.href.toLowerCase();
+            const isAuth = url.includes('/login') ||
+                           url.includes('/signin') ||
+                           url.includes('/onboarding') ||
+                           url.includes('mode=login') ||
+                           text.includes("see what's happening") ||
+                           text.includes("sign in to x") ||
+                           text.includes("happening now") ||
+                           text.includes("join today") ||
+                           text.includes("sign in to continue") ||
+                           text.includes("log in to continue") ||
+                           text.includes("enter your password") ||
+                           title.includes("log in") ||
+                           title.includes("sign in") ||
+                           document.querySelector('input[type="password"]') !== null;
+            const sso = Array.from(document.querySelectorAll('button, a, div[role="button"]'))
+              .map(b => (b.innerText || b.textContent || '').trim())
+              .filter(t => /continue with|sign in with|log in with/i.test(t));
+            return { isAuth, sso: [...new Set(sso)].slice(0, 5) };
+          }
+        });
+        const res = checkRes?.[0]?.result;
+        if (res?.isAuth || isAuthUrlPattern) {
+          pageAuthDetected = true;
+          detectedSsoButtons = res?.sso || [];
+        }
+      } catch (e) {
+        if (isAuthUrlPattern) pageAuthDetected = true;
+      }
+
+      if (pageAuthDetected && !activeTask._userHasSignedIn) {
+        console.log('[SQ] Post-navigation Login Wall / Auth Barrier Detected! Pausing for HITL on:', tab.url);
+        activeTask.status = 'waiting_user_input';
+        activeTask._isExecuting = false;
+
+        let siteName = 'this website';
+        try {
+          siteName = new URL(tab.url).hostname.replace('www.', '');
+        } catch(e) {}
+
+        // Ensure a paused step exists in the queue so it is not prematurely finished
+        let pausedStep = activeTask.steps.find(s => s.status === 'pending' || s.status === 'running');
+        if (pausedStep) {
+          pausedStep.status = 'paused';
+        } else {
+          activeTask.steps.push({
+            type: 'wait_for_user',
+            label: `Sign in to ${siteName} to proceed`,
+            status: 'paused'
+          });
+        }
+        broadcastStepProgress();
+
+        const pauseMsg = `Sign-in required on ${siteName}. Please sign in in browser or use the Action Req tab in Side Panel.`;
+        broadcastStatus('waiting_user_input', pauseMsg);
+
+        chrome.tabs.sendMessage(tabId, {
+          type: 'show_hud_overlay',
+          text: `⏸️ Sign-in required on ${siteName}: Please sign in or use Action Req tab`,
+          paused: true
+        }).catch(() => {});
+
+        chrome.runtime.sendMessage({
+          type: 'require_user_input',
+          payload: {
+            reason: 'login_credentials',
+            title: `Sign-in Required on ${siteName}`,
+            message: `The agent reached an onboarding or login screen on ${siteName}. Please sign in in the browser window or use the One-Click SSO / credential fields below.`,
+            url: tab.url,
+            ssoButtons: detectedSsoButtons.length > 0 ? detectedSsoButtons : ['Continue with Google', 'Continue with Apple', 'Continue with phone']
+          }
+        }).catch(() => {});
+
+        return;
+      }
+
       activeTask.status = 'running';
 
       // If this is a search results page (GitHub or Wikipedia), pause to show results and extract real findings
@@ -2493,7 +3216,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       }
 
       setTimeout(() => {
-        if (activeTask) {
+        if (activeTask && activeTask.status !== 'waiting_user_input' && !activeTask.steps?.some(s => s.status === 'paused')) {
           activeTask.status = 'running';
           activeTask._isExecuting = false;
           runStepQueue(tabId);
@@ -3421,6 +4144,34 @@ function broadcastStatus(state, message = '') {
     type: 'status',
     payload: currentStatus
   }).catch(() => {});
+
+  // Relay real-time HUD status to active browser tab
+  try {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const activeTab = tabs?.[0];
+      if (!activeTab?.id) return;
+      const url = activeTab.url || '';
+      if (url.startsWith('chrome://') || url.startsWith('edge://') || url.startsWith('about:') || url.startsWith('chrome-extension://')) return;
+
+      if (state === 'acting' || state === 'thinking') {
+        safeSendMessageToTab(activeTab, {
+          type: 'show_hud_overlay',
+          text: message || (state === 'thinking' ? '⚡ Aero Agent: Reasoning...' : '⚡ Aero Agent: Executing...'),
+          paused: false
+        });
+      } else if (state === 'waiting_user_input') {
+        safeSendMessageToTab(activeTab, {
+          type: 'show_hud_overlay',
+          text: message || '⏸️ Aero Agent Paused: Action Required',
+          paused: true
+        });
+      } else if (state === 'online' || state === 'ready') {
+        safeSendMessageToTab(activeTab, {
+          type: 'hide_hud_overlay'
+        });
+      }
+    });
+  } catch (e) {}
 }
 
 connectNativeHost();

@@ -11,7 +11,11 @@
     "tabs",
     "offscreen",
     "nativeMessaging",
-    "sidePanel"
+    "sidePanel",
+    "debugger"
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ],
   "action": {
     "default_icon": {
@@ -35,7 +39,7 @@
       "matches": ["<all_urls>"],
       "js": ["pii_detector.js", "content.js"],
       "run_at": "document_start",
-      "all_frames": false
+      "all_frames": true
     }
   ],
   "icons": {
@@ -53,7 +57,9 @@
         "permission.html",
         "permission.js",
         "popup.html",
-        "offscreen.html"
+        "offscreen.html",
+        "summary_viewer.html",
+        "summary_viewer.js"
       ],
       "matches": ["<all_urls>"]
     }

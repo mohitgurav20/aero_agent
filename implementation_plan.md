@@ -1,204 +1,171 @@
-# Final Implementation Plan — Unified Vision, Privacy & Execution Architecture
+# Architectural Implementation Plan: SIH26171 Autonomous Privacy-Preserving Vision Agent
 
-> Fully integrating the **ISRO PS Privacy-Preserving Architecture** with the **Execution & Screen Perception Engine**, while preserving all previous work (autonomous compound flows, 1-click SSO, voice dictation, and hash-chain audit logging).
+This comprehensive implementation plan addresses the full **SIH / ISRO Problem Statement** requirements and lays out the step-by-step architecture for the **6 major requested features**:
 
----
-
-## 1. Root Cause Diagnosis: Why the System is Failing Right Now
-
-| Component | Root Cause | Consequence |
-|---|---|---|
-| **Native Messaging Link** | `voicc_host.bat` has hardcoded paths to `C:\Users\Asus\...` and Python 3.11; registry points to an older folder name. | Chrome instantly disconnects from the Python host on launch (`offline`). |
-| **Extension Execution Trap** | `background.js` has a regex `StepQueue` that intercepts queries; when DOM substring matching fails, it marks steps as `skipped` and declares fake completion, or falls into an unconditional Priority 6 Google search fallback. | Agent never executes real commands; Phase 3 native AI host forwarding is 100% unreachable dead code. |
-| **Screen Perception Blindness** | Visual numbered overlays are explicitly disabled (`render_overlays: false`); screenshots lack visual tags; the standalone `vision/pipeline.py` is never imported by the host; and `agent_loop.py` restricts vision solely to opaque regions. | The agent cannot see what is happening on screen; vision models have no visual tags to ground against. |
-| **Ollama Model Mismatch** | `config.py` requests `qwen2.5:3b-instruct-q4_K_M` and `qwen2-vl:2b-instruct-q4_K_M`. Your Ollama instance has `qwen2.5:3b` and `moondream:latest`. | Any model call to Ollama returns HTTP 404 (`ModelNotFound`). |
-| **ISRO PS Compliance Gap** | PS requires a client-side Privacy-Preserving Filter (redacting passwords, PII, blurring faces) before sending visual context to a server (40% of evaluation marks), plus client-side screen evaluation. | Missing privacy filter = 0/40 on PII detection & redaction metrics. |
+1. **Multi-Format Document Ingestion** (Images, PDFs, Word/Text docs)
+2. **Interactive Human-In-The-Loop (HITL) Prompt Tab** (Fixing false completion on logins, 2FA, and credentials)
+3. **High-Accuracy Multilingual Voice Recognition** (Local Whisper-powered pipeline for technical terms and Indian accents)
+4. **Dedicated Summary & Explanation Knowledge Tab** (Rich, structured drawer for website/document summaries)
+5. **Antigravity-Style Luminous Blue Translucent HUD Overlay** (Visual feedback showing real-time agent execution on web pages)
+6. **Interactive Two-Way Voice Response (TTS)** (Agent verbally announcing actions and milestones)
 
 ---
 
-## 2. Target Unified Architecture
+## 1. Audit Against Official SIH / ISRO Problem Statement
 
+| PS Component / Metric | Weight | Current Codebase Status | Architectural Upgrade & Solution |
+| :--- | :--- | :--- | :--- |
+| **Accuracy of visual context from screen** | **25%** | DOM tree snapshot in `content.js`, canvas crop in `offscreen.js`, and VLM (`moondream:latest`) on local server. | Implement high-density visual state extractor combining DOM bounding boxes and VLM scene understanding. |
+| **Recall & precision for sensitive/PII data** | **20%** | Regex and DOM-based PII detector in `pii_detector.js` (Aadhaar, PAN, emails, phones, passwords). | Expand detection with context-aware semantic obfuscation and password/token masking before any payload leaves the client. |
+| **Precision of visual redaction** | **20%** | Canvas blackout and security border overlay in `pii_redactor.js`. | Ensure 100% of screenshots sent to `/api/vlm` or `/api/plan` pass through `PIIRedactor.redactScreenshot` first, logging cryptographic hashes to `audit_chain.jsonl`. |
+| **Client-side resource utilization** | **20%** | Lightweight extension with sub-50MB memory footprint and offscreen canvas processing. | Keep client-side footprint minimal by offloading heavy inference to local server (`127.0.0.1:5000`) while redacting in client DOM memory. |
+| **Overall end-to-end task latency** | **15%** | Sub-200ms DOM action execution via direct script execution in `world: 'MAIN'`. | Maintain sub-200ms action dispatch; use fast-path heuristics before triggering heavy VLM cycles. |
+
+---
+
+## 2. Critical Problem Statement Fix: Login & User Credentials (HITL)
+
+> [!CAUTION]
+> **Issue Identified**: The agent currently marks a task as completed prematurely when it hits a login screen, SSO prompt, or forms requiring unknown credentials.
+>
+> **Solution**:
+> - Introduce an explicit **Human-in-the-Loop (HITL)** state: `waiting_user_input`.
+> - When the agent detects login walls, 2FA/OTP prompts, or missing user information:
+>   1. **Pauses execution** immediately.
+>   2. **Verbal announcement**: *"I have paused at the login screen. Please enter your credentials or complete the sign-in so I can proceed."*
+>   3. **Opens the "Action Required" Tab / Modal** in the side panel with an intuitive interface.
+>   4. Once the user enters the information or clicks **"I've Signed In — Continue Task"**, the agent seamlessly resumes its automated step queue.
+
+---
+
+## 3. High-Accuracy Voice Recognition Overhaul
+
+> [!WARNING]
+> **Issue Identified**: The native browser Web Speech API performs poorly with technical words ("LeetCode", "Sudoku", "Topological", "compile") and varied accents.
+>
+> **Solution**:
+> - Upgrade from pure browser `webkitSpeechRecognition` to a **Dual-Engine Audio Pipeline**:
+>   - **Capture**: Offscreen audio processor records clean 16kHz mono PCM audio.
+>   - **Transcription**: Sends recorded WAV to `POST http://127.0.0.1:5000/api/voice` powered by local Whisper (`faster-whisper` / `qwen2.5` speech processing).
+>   - **Multilingual Support**: High accuracy for Indian English, Hindi, and Kannada.
+>   - **Real-Time Visualizer**: Audio waveform indicator on the mic button so users know their voice is being captured clearly.
+
+---
+
+## 4. End-to-End System Architecture
+
+```mermaid
+graph TD
+    User([User Voice / Text / Document Upload]) --> UI[Aero Agent Side Panel]
+    UI --> Upload[Document & Image Ingestion Engine]
+    UI --> Mic[16kHz Audio Stream -> Local Whisper STT]
+    UI --> Overlay[Antigravity Luminous Blue HUD Overlay]
+    UI --> TTS[Two-Way Speech Synthesis Voice Reply]
+    UI --> HITL[Human-In-The-Loop Input Tab]
+    UI --> SummaryTab[Dedicated Summary & Knowledge Drawer]
+
+    Upload --> BG[background.js Orchestrator]
+    Mic --> ServerSTT[POST /api/voice Whisper Server]
+    ServerSTT --> BG
+
+    BG --> Redactor[Client-Side PII Redactor]
+    Redactor --> LLM[Local Ollama Reasoning Engine]
+    LLM --> Exec[content.js Execution Engine]
+    Exec --> Overlay
 ```
-┌───────────────────────────────────────────────────────────────────────────────────────────┐
-│                               CHROME EXTENSION (CLIENT-SIDE)                              │
-│                                                                                           │
-│   1. USER INPUT                                                                           │
-│      ├── Voice (Hindi / Kannada / English Web Speech API + Offscreen PCM)                 │
-│      └── Text Input & Dynamic Suggestion Chips                                            │
-│                                                                                           │
-│   2. SCREEN PERCEPTION & VISUAL GROUNDING (Task #43, #139)                                │
-│      ├── High-contrast Numbered-Tag Badges rendered directly over interactive DOM nodes   │
-│      │   (#1, #2, #3... pink pill badges with bounding boxes)                            │
-│      └── Local Canvas Screenshot Capture (includes visual numbered tags)                  │
-│                                                                                           │
-│   3. PRIVACY-PRESERVING PII REDACTION FILTER (ISRO PS Requirement — 40% Evaluation Score)│
-│      ├── DOM + Regex PII Detector (passwords, emails, phone, Aadhaar, PAN, credit cards)  │
-│      ├── Face Detector (Lightweight in-browser ViT / MobileNet via Transformers.js)       │
-│      └── Visual Redactor (Blacks out passwords, blurs faces, masks text with [REDACTED])  │
-│                                                                                           │
-│   4. CLIENT-SIDE VISION EVALUATOR (ISRO PS WebGPU / ONNX)                                 │
-│      └── In-browser ViT classifies page type (login form, dashboard, catalog, blank)      │
-│                                                                                           │
-│   5. LOCAL HTTP RELAY                                                                     │
-│      └── Sends sanitized screenshot + cleaned DOM + task via HTTP fetch()                │
-└─────────────────────────────────────────────┬─────────────────────────────────────────────┘
-                                              │ HTTP POST /api/plan (JSON + base64)
-                                              ▼
-┌───────────────────────────────────────────────────────────────────────────────────────────┐
-│                               LOCAL AGENT SERVER (Python 3.13)                            │
-│                                                                                           │
-│   1. API Gateway (`server/app.py` — Flask / FastAPI at http://127.0.0.1:5000)             │
-│      └── Eliminates fragile Windows Registry / Native Messaging .bat shim failures        │
-│                                                                                           │
-│   2. Agent Loop (`agent_loop.py` & `perception.py`)                                       │
-│      ├── Draft Model (0.5B) for rapid reflex planning (<250ms)                            │
-│      ├── Vision Perception (Moondream:latest / Qwen2-VL) on sanitized numbered-tag image   │
-│      ├── Full Text Reasoner (Qwen2.5:3b) for compound logic                               │
-│      ├── Guardrail Validation (Destructive action check, label consistency)               │
-│      └── Proof-of-Perception (Tamper-evident SHA-256 Hash Chain Audit Log)                │
-└─────────────────────────────────────────────┬─────────────────────────────────────────────┘
-                                              │ HTTP Response: Verified Action Plan
-                                              ▼
-┌───────────────────────────────────────────────────────────────────────────────────────────┐
-│                           DETERMINISTIC MULTI-ACTION EXECUTOR                             │
-│                                                                                           │
-│   - Executes action sequence on active tab (click #tag, type into #tag, select, scroll)  │
-│   - Dynamic SPA Retry Engine (waits up to 2.5s for React/Vue DOM hydration)              │
-│   - Autonomous 1-Click SSO & Credential Login Workflow                                    │
-│   - Dispatches trusted pointer & input events                                             │
-│   - Real-time step progress broadcast to Extension UI                                     │
-└───────────────────────────────────────────────────────────────────────────────────────────┘
-```
 
 ---
 
-## 3. Detailed Implementation Phases
+## 5. Detailed Feature Specifications
 
-### Phase 1: Local HTTP API Server (`server/app.py`)
-*Replaces brittle Native Messaging with a robust local HTTP server while reusing 100% of existing agent code.*
-
-- **[NEW] `server/app.py`**:
-  - Exposes `GET /api/health` (checks Ollama connectivity, resident models, agent status).
-  - Exposes `POST /api/plan` (accepts sanitized DOM, screenshot, task description, returns structured `Plan`).
-  - Exposes `POST /api/voice` (processes audio PCM, returns 3-language transcript via Whisper/IndicConformer).
-  - Exposes `GET /api/audit_log` and `POST /api/verify_log` (returns tamper-evident hash-chain).
-  - Imports directly from `native-host/voicc_host/` (`AgentLoop`, `OllamaClient`, `PerceptionLadder`, `DecisionLogger`, `check_plan`).
-- **[NEW] `server/run.py`**:
-  - Clean server startup script with auto-detection of local Python 3.13 environment.
-- **[MODIFY] `native-host/voicc_host/config.py`**:
-  - Align default models with Ollama on this machine:
-    - `text`: `"qwen2.5:3b"`
-    - `vision`: `"moondream:latest"`
-    - `draft`: `"qwen2.5:0.5b-instruct-q4_K_M"`
-  - Configure `ALLOWED_HOSTS` to support local HTTP origins (`127.0.0.1`, `localhost`).
-- **[MODIFY] `native-host/install/voicc_host.bat` & `com.sih26171.voicc.json`**:
-  - Update paths dynamically to `C:\Users\mayab\...` and register the registry key so Native Messaging remains operational as a dual-mode fallback.
+### Feature 1: Multi-Format Document Ingestion (Images / PDFs / Docs)
+- **UI Element**: Attachment clip button in the Aero Agent chat box.
+- **Supported Formats**: `.pdf`, `.png`, `.jpg`, `.jpeg`, `.txt`, `.md`, `.json`, `.csv`.
+- **Processing**:
+  - PDFs: Parsed client-side using `pdf.js` or converted to text chunks.
+  - Images: Encoded as base64 and routed to local VLM (`moondream:latest`) for visual inspection.
+  - Text/Docs: Text extracted and attached to the goal context.
+- **Use Cases Supported**:
+  - *"Summarize this uploaded report.pdf"*
+  - *"Fill the registration form using my attached resume.pdf"*
+  - *"Solve the math or coding problem shown in this uploaded screenshot.png"*
 
 ---
 
-### Phase 2: Client-Side Privacy-Preserving Redaction Filter (ISRO PS — 40% Marks)
-*Ensures sensitive data (passwords, PII, faces) is detected and redacted inside the browser before leaving the client.*
-
-- **[NEW] `extension/pii_detector.js`**:
-  - **DOM-based detection**:
-    - `input[type="password"]` → Passwords
-    - `input[type="email"]`, `input[type="tel"]` → Contact info
-    - `input[name*="aadhaar"]`, `input[name*="pan"]`, `input[name*="ssn"]` → National IDs
-    - `input[name*="card"]`, `input[name*="cvv"]` → Payment info
-  - **Regex-based detection**:
-    - Aadhaar (`/\b\d{4}\s?\d{4}\s?\d{4}\b/`)
-    - PAN card (`/\b[A-Z]{5}\d{4}[A-Z]\b/`)
-    - Email addresses & Indian phone numbers (`/(\+91[\s-]?)?[6-9]\d{9}/`)
-  - **Visual Face Detection**:
-    - Uses in-browser lightweight model or skin/face Haar cascade in canvas to locate face bounding boxes.
-- **[NEW] `extension/pii_redactor.js`**:
-  - Canvas-based image redaction:
-    - Draws solid black privacy boxes over password fields and credit card CVVs.
-    - Applies a Gaussian blur (radius 12px) over detected faces.
-  - DOM text sanitization:
-    - Replaces actual sensitive values with token placeholders: `[REDACTED_EMAIL]`, `[REDACTED_PHONE]`, `●●●●●●`.
-  - Produces a **Redaction Audit Report** (`total_pii_detected`, `regions_masked`, `timestamp`).
+### Feature 2: Interactive Human-In-The-Loop (HITL) Prompt Tab
+- **Trigger Conditions**:
+  - Detecting password fields, 2FA/OTP inputs, or captcha challenges.
+  - Detecting missing required information (e.g. user handle, delivery address, custom choice).
+- **Behavior**:
+  - Step queue transitions to `status: 'waiting_user_input'`.
+  - Side panel opens the **Action Required** drawer with:
+    - Contextual prompt explaining what is needed.
+    - Direct input field(s) for the user.
+    - Quick-action button: *"Continue Execution"*.
+  - Live HUD on the webpage displays an amber banner: `⏸️ Aero Agent Paused: User Action Required`.
 
 ---
 
-### Phase 3: Screen Perception & Numbered-Tag Grounding
-*Enables the agent to truly "see" what is happening on the screen with numbered visual tags.*
-
-- **[MODIFY] `extension/content.js`**:
-  - Enhance `renderOverlayBadges()`:
-    - Injects high-visibility numbered badges (`#1`, `#2`, `#3`...) over every interactive element.
-    - Badges styled with high contrast (bright pink background `#f43f5e`, white bold font, solid border, z-index 2147483647).
-  - Ensure overlays are rendered **before** screenshot capture when visual perception is required.
-  - Automatically clear overlays after screenshot or execution so the user's browsing experience remains clean.
-- **[MODIFY] `native-host/voicc_host/perception.py` & `vision/pipeline.py`**:
-  - Wire `VisionProvider` to format prompts tailored for `moondream:latest`:
-    - E.g.: *"Looking at this webpage with numbered pink tags, which tag number should be clicked to [task]? Answer with only the tag number."*
-  - Connect `vision/foveation.py` to crop clusters of interactive elements when full-page resolution is high.
+### Feature 3: High-Accuracy Whisper Multilingual Voice Pipeline
+- **Audio Capture**: `offscreen.js` captures raw audio through `AudioContext` downsampled to 16,000 Hz, 16-bit Mono PCM.
+- **Server Endpoint**: `POST /api/voice` takes base64 audio and transcribes via local Whisper model with language auto-detection (en, hi, kn).
+- **Phonetic Normalization**: Cleans tech terms and homophones (e.g., *"slove"* $\rightarrow$ *"solve"*, *"lead code"* $\rightarrow$ *"leetcode"*, *"complie"* $\rightarrow$ *"compile"*).
 
 ---
 
-### Phase 4: Extension Pipeline Rewire & Autonomous Flow Preservation
-*Stops fake regex skipping, preserves all autonomous multi-action features, and routes commands through real AI reasoning.*
-
-- **[MODIFY] `extension/background.js`**:
-  - Update `handleUserCommand`:
-    - **Step 1**: Render visual tags on active tab and capture sanitized screenshot via `pii_redactor.js`.
-    - **Step 2**: Check local server (`http://127.0.0.1:5000/api/plan`). If server is running, forward sanitized screenshot + DOM.
-    - **Step 3**: If server returns compound action plan, pass it to `executeActionPlan` on the active tab.
-    - **Step 4**: Retain the fast reflex rules for instant operations (e.g. "go back", "scroll down", direct domain navigation) without falling into the broken Google search trap.
-  - Preserve all existing capabilities:
-    - Autonomous 1-click SSO (Google/OAuth One-Tap detection).
-    - Dynamic SPA retry logic (waiting for React/Vue hydration).
-    - Cross-page step queue state persistence (`activeTask`).
-    - Multi-word phonetic website extraction ("try hack me" → "tryhackme", "git hub" → "github").
-- **[MODIFY] `extension/popup.js` & `popup.html`**:
-  - Add a **"Privacy Shield" badge** to the UI indicating active PII redaction (e.g., `🛡️ Privacy Filter: Active`).
-  - Add a server connection indicator (`● Server Connected: 127.0.0.1:5000`).
-  - Keep live voice transcription, speech silence auto-submit, always-on mode, and audit log verification button.
+### Feature 4: Dedicated Summary & Knowledge Tab
+- **UI Structure**: A third top-level navigation tab in `popup.html`:
+  - `[Actions]` | `[Summary]` | `[Audit Log]`
+- **Display Features**:
+  - **Executive Summary** card.
+  - **Key Highlights** bullet list with tags.
+  - **Structured Data Table** for comparative figures/metrics.
+  - **Action Items** checklist.
+  - **Export Buttons**: Copy Markdown, Save as Text, or Ask Follow-up Question.
 
 ---
 
-### Phase 5: Server-Side Redaction Protocol & Prompts
-*Teaches the Ollama models to understand sanitized data without breaking action planning.*
-
-- **[MODIFY] `native-host/voicc_host/prompts.py`**:
-  - Add awareness for `[REDACTED]` markers:
-    - *"Fields labeled [REDACTED_*] represent privacy-masked user inputs (passwords, emails, phone numbers). Plan actions around them normally (e.g. Click the submit button after the masked field)."*
-- **[MODIFY] `native-host/voicc_host/verifier.py`**:
-  - Verify that actions targeting masked fields succeed without requiring access to the unredacted values.
+### Feature 5: Antigravity-Style Luminous Blue Translucent HUD Overlay
+- **Injected Element**: `#aero-agent-hud-overlay` in `content.js`.
+- **Visual Design**:
+  - **Vignette Glow**: Subtle, semi-transparent deep blue luminous ambient border (`rgba(59, 130, 246, 0.2)` fading to transparent).
+  - **Top Floating Status Pill**: Sleek glassmorphic badge at top center:
+    - `⚡ Aero Agent is working: [Current Action Name]` with a pulsing cyan indicator.
+  - **Target Element Reticle**: Highlight box with smooth animated glow around the exact button/input being clicked or typed into.
+  - Automatically activates when agent enters `acting` or `thinking` state; fades out smoothly on task completion or pause.
 
 ---
 
-## 4. Verification & Testing Plan
+### Feature 6: Interactive Two-Way Voice Response (TTS)
+- **Engine**: Client-side `window.speechSynthesis` with optimized natural voice selection.
+- **Header Controls**: Audio toggle button (🔊 / 🔇) in the Aero Agent panel header with persisted state.
+- **Announcements**:
+  - Task kickoff: *"Starting task: [Goal]"*
+  - Key transitions: *"Navigating to LeetCode...", "Synthesizing C++ solution...", "Running compiler...", "Submitting..."*
+  - HITL alert: *"I need your input to continue with this login. Please see the side panel."*
+  - Task success: *"Accepted! All testcases passed successfully."*
 
-### Automated Tests
-1. **Server API Verification**:
-   ```powershell
-   python server/run.py
-   curl http://127.0.0.1:5000/api/health
-   ```
-2. **Ollama Model Integration**:
-   ```powershell
-   python -c "import requests; print(requests.post('http://127.0.0.1:11434/api/generate', json={'model':'moondream:latest','prompt':'Hi','stream':False}).json())"
-   ```
-3. **Core Host Unit Tests**:
-   ```powershell
-   python -m pytest native-host/tests/
-   ```
+---
 
-### Manual & PS Demonstration Checklist
-1. **Screen Perception Verification**:
-   - Give command: `"Click on [specific link/button]"`.
-   - Verify visual numbered tags appear on the screen.
-   - Verify the agent correctly identifies the matching tag number and clicks it.
-2. **Privacy Redaction Verification**:
-   - Navigate to a page with login/passwords/email fields.
-   - Trigger screenshot capture.
-   - Inspect captured image in server log: verify passwords are blacked out and faces/emails are masked.
-   - Verify server reasons on the sanitized data and successfully submits the form.
-3. **Cross-Page Autonomous Flow**:
-   - Give compound command: `"Open github and search for SIH"`.
-   - Verify navigation, SPA wait, and search execution complete seamlessly.
-4. **Voice Command Verification**:
-   - Test speech recognition in English, Hindi, or Kannada.
-   - Verify transcription auto-submits and executes the expected browser action.
+## 6. Implementation Stages & Verification Plan
+
+### Phase 1: Visual HUD & Interactive Two-Way Voice
+1. Inject Antigravity-style blue translucent HUD overlay in `content.js`.
+2. Add speech synthesis voice output in `popup.js` with mute/unmute control.
+3. **Verification**: Start any task and verify the luminous blue HUD glow appears and the agent verbally announces its progress.
+
+### Phase 2: HITL User Input Tab & Login Handling
+1. Add `#hitl-modal` drawer in `popup.html` and `popup.js`.
+2. Update `background.js` to detect login/credential walls, pause execution, and wait for user confirmation.
+3. **Verification**: Run a login workflow; confirm the agent pauses cleanly, prompts the user, and resumes once input is provided.
+
+### Phase 3: High-Accuracy Voice Recognition (Whisper)
+1. Implement audio transcription handler in `server/app.py` via `POST /api/voice`.
+2. Connect `offscreen.js` WAV encoder to send audio upon mic button release.
+3. **Verification**: Speak complex coding commands with Indian accents and verify high-accuracy transcription.
+
+### Phase 4: Document Ingestion & Dedicated Summary Tab
+1. Add file upload handler in `popup.html` and `popup.js` supporting PDF/Image/Text.
+2. Add dedicated **Summary Tab** in `popup.html` with rich markdown formatting.
+3. Connect document context into `background.js` task execution.
+4. **Verification**: Upload a PDF or screenshot and prompt the agent to summarize or act upon it.

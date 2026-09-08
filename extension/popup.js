@@ -43,6 +43,30 @@ document.addEventListener('DOMContentLoaded', () => {
   const modalConfirmBtn = document.getElementById('modal-confirm-btn');
   const modalRejectBtn = document.getElementById('modal-reject-btn');
 
+  // New Feature DOM Elements
+  const voiceReplyBtn = document.getElementById('voice-reply-btn');
+  const tabBtnActions = document.getElementById('tab-btn-actions');
+  const tabBtnHitl = document.getElementById('tab-btn-hitl');
+  const tabViewActions = document.getElementById('tab-view-actions');
+  const tabViewHitl = document.getElementById('tab-view-hitl');
+
+  const hitlSsoContainer = document.getElementById('hitl-sso-container');
+  const hitlSsoButtons = document.getElementById('hitl-sso-buttons');
+  const hitlUsernameInput = document.getElementById('hitl-username-input');
+  const hitlPasswordInput = document.getElementById('hitl-password-input');
+  const hitlSubmitCredsBtn = document.getElementById('hitl-submit-creds-btn');
+
+  const docUploadBtn = document.getElementById('doc-upload-btn');
+  const docFileInput = document.getElementById('doc-file-input');
+  const attachedFileBadge = document.getElementById('attached-file-badge');
+  const attachedFileName = document.getElementById('attached-file-name');
+  const attachedFileSize = document.getElementById('attached-file-size');
+  const removeAttachedFileBtn = document.getElementById('remove-attached-file-btn');
+
+  const summarizePageBtn = document.getElementById('summarize-page-btn');
+  const hitlContinueBtn = document.getElementById('hitl-continue-btn');
+  const hitlBannerDesc = document.getElementById('hitl-banner-desc');
+
   // State
   let currentClarification = null;
   let isRecording = false;
@@ -52,9 +76,428 @@ document.addEventListener('DOMContentLoaded', () => {
   let overlaysVisible = false;
   let currentPendingConfirmationId = null;
   let localSpeechRec = null;
-  let alwaysOnMode = false;        // Always-on continuous voice mode
-  let autoResumeTimer = null;      // Timer to auto-resume listening
-  let lastExecutedCommand = '';    // Dedup: avoid re-running same command
+  let alwaysOnMode = false;
+  let autoResumeTimer = null;
+  let lastExecutedCommand = '';
+  let voiceReplyEnabled = true;
+  let attachedDocument = null; // { name, size, type, base64, extractedText }
+  let currentSummaryMarkdown = '';
+
+  // Load saved voice toggle state
+  chrome.storage.local.get(['voice_reply_enabled'], (res) => {
+    if (res && res.voice_reply_enabled !== undefined) {
+      voiceReplyEnabled = !!res.voice_reply_enabled;
+      if (voiceReplyBtn) {
+        voiceReplyBtn.textContent = voiceReplyEnabled ? '🔊' : '🔇';
+        voiceReplyBtn.style.opacity = voiceReplyEnabled ? '1' : '0.5';
+      }
+    }
+  });
+
+  if (voiceReplyBtn) {
+    voiceReplyBtn.addEventListener('click', () => {
+      voiceReplyEnabled = !voiceReplyEnabled;
+      voiceReplyBtn.textContent = voiceReplyEnabled ? '🔊' : '🔇';
+      voiceReplyBtn.style.opacity = voiceReplyEnabled ? '1' : '0.5';
+      chrome.storage.local.set({ voice_reply_enabled: voiceReplyEnabled });
+      if (voiceReplyEnabled) {
+        speakAgentMessage('Voice replies enabled');
+      } else if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+    });
+  }
+
+  // Navigation tab switcher (Actions & Action Req.)
+  function switchTab(targetTab) {
+    const tabs = ['actions', 'hitl'];
+    tabs.forEach(t => {
+      const btn = document.getElementById(`tab-btn-${t}`);
+      const view = document.getElementById(`tab-view-${t}`);
+      if (btn && view) {
+        if (t === targetTab) {
+          btn.classList.add('active');
+          btn.style.background = t === 'hitl' ? 'rgba(245, 158, 11, 0.2)' : '#ffffff';
+          btn.style.color = t === 'hitl' ? '#d97706' : 'var(--pink-600)';
+          btn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.08)';
+          view.style.display = 'flex';
+        } else {
+          btn.classList.remove('active');
+          btn.style.background = 'transparent';
+          btn.style.color = 'var(--text-muted)';
+          btn.style.boxShadow = 'none';
+          view.style.display = 'none';
+        }
+      }
+    });
+  }
+
+  if (tabBtnActions) tabBtnActions.addEventListener('click', () => switchTab('actions'));
+  if (tabBtnHitl) tabBtnHitl.addEventListener('click', () => switchTab('hitl'));
+
+  // Two-Way Interactive Voice Engine (TTS)
+  let lastSpokenText = '';
+  function speakAgentMessage(text) {
+    if (!voiceReplyEnabled || !window.speechSynthesis || !text) return;
+    try {
+      if (text === lastSpokenText) return;
+      lastSpokenText = text;
+
+      window.speechSynthesis.cancel();
+      let clean = text
+        .replace(/```[\s\S]*?```/g, 'code block')
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/https?:\/\/\S+/g, '')
+        .replace(/[#*_\~\[\]\(\)\{\}\<\>|]/g, ' ')
+        .replace(/[✓⚡⚠️🔴📌🔑📊🚀]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!clean) return;
+      if (clean.length > 140) clean = clean.slice(0, 137) + '...';
+
+      const utterance = new SpeechSynthesisUtterance(clean);
+      utterance.rate = 1.05;
+      utterance.pitch = 1.0;
+      const voices = window.speechSynthesis.getVoices() || [];
+      const naturalVoice = voices.find(v => v.lang?.startsWith('en') && (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Jenny')));
+      if (naturalVoice) utterance.voice = naturalVoice;
+
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      console.warn('[TTS] Speech synthesis error:', e);
+    }
+  }
+
+  // Document Upload Handlers
+  if (docUploadBtn && docFileInput) {
+    docUploadBtn.addEventListener('click', () => docFileInput.click());
+    docFileInput.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const fileName = file.name;
+      const fileSizeStr = file.size > 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : `${Math.round(file.size / 1024)} KB`;
+
+      if (attachedFileName) attachedFileName.textContent = fileName;
+      if (attachedFileSize) attachedFileSize.textContent = `(${fileSizeStr})`;
+      if (attachedFileBadge) attachedFileBadge.style.display = 'flex';
+
+      updateStatus('thinking', `Reading document: ${fileName}...`);
+
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64Data = (reader.result || '').split(',')[1] || '';
+        attachedDocument = {
+          name: fileName,
+          size: file.size,
+          type: file.type,
+          base64: base64Data,
+          extractedText: ''
+        };
+
+        try {
+          const resp = await fetch('http://127.0.0.1:5000/api/extract_document', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              file_base64: base64Data,
+              file_name: fileName,
+              file_type: file.type
+            })
+          });
+          if (resp.ok) {
+            const json = await resp.json();
+            attachedDocument.extractedText = json.extracted_text || '';
+            updateStatus('online', `✓ Attached: ${fileName} (${json.total_chars} chars)`);
+            speakAgentMessage(`Attached document ${fileName}`);
+          }
+        } catch (err) {
+          updateStatus('online', `✓ Attached: ${fileName}`);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  if (removeAttachedFileBtn) {
+    removeAttachedFileBtn.addEventListener('click', () => {
+      attachedDocument = null;
+      if (docFileInput) docFileInput.value = '';
+      if (attachedFileBadge) attachedFileBadge.style.display = 'none';
+      updateStatus('online', 'Document removed');
+    });
+  }
+
+  // HITL Continue Execution Handler
+  if (hitlContinueBtn) {
+    hitlContinueBtn.addEventListener('click', () => {
+      const inlineHitl = document.getElementById('inline-hitl-card');
+      if (inlineHitl) inlineHitl.style.display = 'none';
+      const hitlBadge = document.getElementById('hitl-badge');
+      if (hitlBadge) hitlBadge.style.display = 'none';
+      switchTab('actions');
+      updateStatus('acting', 'Resuming task execution...');
+      speakAgentMessage('Resuming execution');
+      chrome.runtime.sendMessage({ type: 'resume_step_queue' });
+    });
+  }
+
+  // Inline HITL Continue Execution Handler (on Actions tab)
+  const inlineHitlContinueBtn = document.getElementById('inline-hitl-continue-btn');
+  if (inlineHitlContinueBtn) {
+    inlineHitlContinueBtn.addEventListener('click', () => {
+      const inlineHitl = document.getElementById('inline-hitl-card');
+      if (inlineHitl) inlineHitl.style.display = 'none';
+      const hitlBadge = document.getElementById('hitl-badge');
+      if (hitlBadge) hitlBadge.style.display = 'none';
+      updateStatus('acting', 'Resuming task execution...');
+      speakAgentMessage('Resuming execution');
+      chrome.runtime.sendMessage({ type: 'resume_step_queue' });
+    });
+  }
+
+  // HITL Submit Credentials Form Handler
+  if (hitlSubmitCredsBtn) {
+    hitlSubmitCredsBtn.addEventListener('click', () => {
+      const username = (hitlUsernameInput?.value || '').trim();
+      const password = (hitlPasswordInput?.value || '').trim();
+      if (!username && !password) return;
+
+      const hitlBadge = document.getElementById('hitl-badge');
+      if (hitlBadge) hitlBadge.style.display = 'none';
+      switchTab('actions');
+      updateStatus('acting', 'Entering credentials securely...');
+      speakAgentMessage('Entering credentials and continuing task');
+      chrome.runtime.sendMessage({
+        type: 'fill_and_submit_credentials',
+        payload: { username, password }
+      });
+      if (hitlPasswordInput) hitlPasswordInput.value = '';
+    });
+  }
+
+  // One-Click SSO button delegation
+  if (hitlSsoContainer) {
+    hitlSsoContainer.addEventListener('click', (e) => {
+      const chip = e.target.closest('.clarify-sso-chip');
+      if (chip) {
+        const ssoText = chip.getAttribute('data-sso') || chip.textContent.trim();
+        chrome.runtime.sendMessage({ type: 'click_sso_option', text: ssoText });
+        updateStatus('acting', `Clicking ${ssoText}...`);
+        speakAgentMessage(`Clicking ${ssoText}`);
+      }
+    });
+  }
+
+  // Drag and Drop files onto input card
+  const inputCard = document.querySelector('.input-card');
+  if (inputCard && docFileInput) {
+    inputCard.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      inputCard.style.borderColor = '#f43f5e';
+      inputCard.style.background = '#fff1f2';
+    });
+    inputCard.addEventListener('dragleave', () => {
+      inputCard.style.borderColor = '';
+      inputCard.style.background = '';
+    });
+    inputCard.addEventListener('drop', (e) => {
+      e.preventDefault();
+      inputCard.style.borderColor = '';
+      inputCard.style.background = '';
+      if (e.dataTransfer?.files?.length > 0) {
+        docFileInput.files = e.dataTransfer.files;
+        docFileInput.dispatchEvent(new Event('change'));
+      }
+    });
+  }
+
+  // Helper: Reliably deliver floating summary modal to the active browser tab
+  async function deliverFloatingSummaryToPage(title, markdown) {
+    const isInternalUrl = (url) => !url || url.startsWith('chrome://') || url.startsWith('edge://') || url.startsWith('about:') || url.startsWith('chrome-extension://');
+
+    let targetTab = null;
+
+    // 1. Check current active tab
+    const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+    const candidate = activeTabs?.[0];
+
+    if (candidate && !isInternalUrl(candidate.url)) {
+      targetTab = candidate;
+    } else {
+      // 2. If current active tab is an internal page (e.g. chrome://extensions), find an open web tab
+      const allTabs = await chrome.tabs.query({ currentWindow: true }).catch(() => []);
+      const webTab = allTabs.find(t => t.url && !isInternalUrl(t.url));
+      if (webTab) {
+        targetTab = webTab;
+        try {
+          await chrome.tabs.update(webTab.id, { active: true });
+        } catch (e) {}
+      }
+    }
+
+    if (!targetTab || !targetTab.id) {
+      console.warn('[Popup] No inspectable web page available to show floating summary.');
+      return false;
+    }
+
+    // Step 1: Ensure content script is running on target tab
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        files: ['content.js']
+      }).catch(() => {});
+    } catch (e) {}
+
+    // Small delay to allow script registration
+    await new Promise(r => setTimeout(r, 60));
+
+    // Step 2: Send message to content script
+    let delivered = false;
+    try {
+      const resp = await chrome.tabs.sendMessage(targetTab.id, {
+        type: 'show_floating_summary',
+        title: title,
+        summaryMarkdown: markdown
+      });
+      if (resp && resp.success) delivered = true;
+    } catch (err) {}
+
+    // Step 3: Direct programmatic execution fallback if message was missed
+    if (!delivered) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: targetTab.id },
+          func: (t, md) => {
+            if (typeof window.showFloatingSummaryCard === 'function') {
+              window.showFloatingSummaryCard(t, md);
+            }
+          },
+          args: [title, markdown]
+        });
+        delivered = true;
+      } catch (err2) {
+        console.error('[Popup] Direct script injection fallback failed:', err2);
+      }
+    }
+    return delivered;
+  }
+
+  // ── EXECUTABLE SUMMARIZATION WORKFLOW ──────────────────────────────────────
+  async function executeSummarizationWorkflow(userGoal = '') {
+    const isDoc = !!(attachedDocument && (attachedDocument.extractedText || attachedDocument.name));
+    const title = isDoc ? `Summary: ${attachedDocument.name}` : 'Web Page Summary';
+
+    updateStatus('thinking', 'Scraping and synthesizing with local LLM...');
+    reasoningBox.innerHTML = `<strong>Synthesizing Summary:</strong> Scraping ${escapeHtml(isDoc ? attachedDocument.name : 'active page')} with local LLM for knowledge drawer & floating pop-up...`;
+    speakAgentMessage('Summarizing content with local intelligence');
+
+    try {
+      let sourceContent = '';
+      let sourceTitle = '';
+
+      if (isDoc && attachedDocument.extractedText) {
+        sourceContent = attachedDocument.extractedText;
+        sourceTitle = attachedDocument.name;
+      } else {
+        // Query active tab and scrape clean content via content script
+        const tabs = await new Promise(resolve => {
+          chrome.tabs.query({ active: true, lastFocusedWindow: true }, resolve);
+        });
+        const activeTab = tabs?.[0];
+        sourceTitle = activeTab?.title || 'Active Webpage';
+
+        if (activeTab?.id) {
+          const res = await chrome.tabs.sendMessage(activeTab.id, { type: 'scrape_page_content' }).catch(() => null);
+          if (res && res.payload && res.payload.text) {
+            sourceContent = res.payload.text;
+            if (res.payload.title) sourceTitle = res.payload.title;
+          } else {
+            // Fallback to extract_dom
+            const domRes = await chrome.tabs.sendMessage(activeTab.id, { type: 'extract_dom' }).catch(() => null);
+            sourceContent = domRes?.payload?.elements?.map(e => e.text).filter(Boolean).join('\n') || '';
+          }
+        }
+      }
+
+      if (!sourceContent || sourceContent.trim().length < 15) {
+        reasoningBox.innerHTML = `<span style="color:#ef4444;">No readable text found to summarize. Please upload a PDF (📎) or open a readable webpage.</span>`;
+        updateStatus('online', 'No content to summarize');
+        return;
+      }
+
+      const resp = await fetch('http://127.0.0.1:5000/api/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: sourceContent,
+          title: sourceTitle,
+          instruction: userGoal || 'Provide an executive summary of this content'
+        })
+      });
+
+      if (!resp.ok) {
+        throw new Error(`Local server returned status ${resp.status}`);
+      }
+
+      const json = await resp.json();
+      currentSummaryMarkdown = json.summary || 'No summary generated.';
+      const finalTitle = json.title || sourceTitle || 'Executive Summary';
+
+      // Pop up floating Knowledge Briefing Card directly on the Chrome tab
+      const delivered = await deliverFloatingSummaryToPage(finalTitle, currentSummaryMarkdown);
+
+      reasoningBox.innerHTML = `
+        <div style="color:#059669; font-weight:700; margin-bottom:4px; display:flex; align-items:center; gap:6px;">
+          <span>📑 Knowledge Briefing Popped Up on Tab</span>
+        </div>
+        <div style="font-size:11.5px; color:#334155; line-height:1.45;">
+          ${delivered ? 'Interactive summary card is now visible directly on your Chrome tab! Click <strong>✕</strong> on the card (or press Esc) to close it.' : 'Summary generated. Switch to an open webpage tab to view the floating pop-up card.'}
+        </div>
+      `;
+
+      updateStatus('online', '✓ Summary Generated');
+      speakAgentMessage('Summary card popped up on webpage');
+    } catch (err) {
+      console.error('[Popup] Summarization workflow failed:', err);
+      reasoningBox.innerHTML = `<span style="color:#ef4444;">Error generating summary: ${escapeHtml(err.message)}</span>`;
+      updateStatus('online', 'Summary error');
+    }
+  }
+
+  // Server health check & Whisper badge auto-updater
+  function checkServerHealth() {
+    fetch('http://127.0.0.1:5000/api/health')
+      .then(r => r.json())
+      .then(d => {
+        const serverBadge = document.getElementById('server-badge');
+        if (serverBadge && d.status === 'ok') {
+          serverBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+          serverBadge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+          serverBadge.style.color = '#10b981';
+          serverBadge.innerHTML = '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#10b981;"></span><span>🟢 Whisper AI Active</span>';
+        }
+      })
+      .catch(() => {
+        const serverBadge = document.getElementById('server-badge');
+        if (serverBadge) {
+          serverBadge.style.background = 'rgba(245, 158, 11, 0.15)';
+          serverBadge.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+          serverBadge.style.color = '#d97706';
+          serverBadge.innerHTML = '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#f59e0b;"></span><span>⚠️ Server Offline (run py server/run.py)</span>';
+        }
+      });
+  }
+  checkServerHealth();
+  setInterval(checkServerHealth, 4000);
+
+  // Summary Page Button in UI
+  if (summarizePageBtn) {
+    summarizePageBtn.addEventListener('click', () => {
+      executeSummarizationWorkflow('Summarize this page');
+    });
+  }
 
   // Initialize status from background service worker
   chrome.runtime.sendMessage({ type: 'get_initial_state' }, (res) => {
@@ -383,6 +826,43 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         break;
 
+      case 'require_user_input':
+        const hitlBadgeEl = document.getElementById('hitl-badge');
+        if (hitlBadgeEl) hitlBadgeEl.style.display = 'inline-block';
+        if (hitlBannerDesc) hitlBannerDesc.textContent = message.payload?.message || 'Authentication or sign-in required in browser.';
+        const bannerTitle = document.getElementById('hitl-banner-title');
+        if (bannerTitle && message.payload?.title) bannerTitle.textContent = message.payload.title;
+        const bannerSub = document.getElementById('hitl-banner-sub');
+        if (bannerSub) bannerSub.textContent = 'Paused: Sign in or select an SSO option to continue';
+
+        // Also display the inline HITL card directly on the Actions tab!
+        const inlineHitlEl = document.getElementById('inline-hitl-card');
+        if (inlineHitlEl) {
+          inlineHitlEl.style.display = 'flex';
+          const inlineDescEl = document.getElementById('inline-hitl-desc');
+          if (inlineDescEl && message.payload?.message) inlineDescEl.textContent = message.payload.message;
+        }
+
+        // Render any SSO buttons detected on the page
+        if (hitlSsoContainer && hitlSsoButtons) {
+          if (message.payload?.ssoButtons && message.payload.ssoButtons.length > 0) {
+            hitlSsoButtons.innerHTML = '';
+            message.payload.ssoButtons.forEach(ssoText => {
+              const chip = document.createElement('button');
+              chip.className = 'clarify-sso-chip';
+              chip.setAttribute('data-sso', ssoText);
+              chip.style.cssText = 'padding: 6px 11px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid #fed7aa; background: #fff; cursor: pointer; color: #9a3412; transition: all 0.15s ease;';
+              chip.textContent = ssoText;
+              hitlSsoButtons.appendChild(chip);
+            });
+            hitlSsoContainer.style.display = 'flex';
+          }
+        }
+
+        switchTab('hitl');
+        speakAgentMessage(message.payload?.title || 'Authentication required. Please sign in to continue.');
+        break;
+
       case 'speech_live_transcript':
         if (message.text) {
           handleSpeechTranscriptUpdate(message.text);
@@ -391,6 +871,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
       case 'step_progress':
         renderStepProgress(message.payload);
+        const hasPausedStep = message.payload?.steps?.some(s => s.status === 'paused');
+        const inlineHitlOnProgress = document.getElementById('inline-hitl-card');
+        if (inlineHitlOnProgress) {
+          inlineHitlOnProgress.style.display = hasPausedStep ? 'flex' : 'none';
+        }
         break;
 
       case 'agent_thought':
@@ -436,6 +921,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
       case 'artifact_generated':
         renderArtifactCard(message.payload);
+        break;
+
+      case 'trigger_summary':
+        executeSummarizationWorkflow(message.query || '');
         break;
     }
   });
@@ -617,6 +1106,7 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         });
       });
+      chrome.runtime.sendMessage({ target: 'offscreen', type: 'start_audio_recording' }).catch(() => {});
     } else {
       // Stop recording
       isRecording = false;
@@ -638,24 +1128,48 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       stopLocalSpeechFallback();
 
-      // Submit recognized text if present
-      const capturedText = commandInput.value.trim();
-      const isAlwaysOnResume = capturedText.toLowerCase().startsWith('🟣');
-      if (capturedText && !capturedText.toLowerCase().startsWith('listening') && !isAlwaysOnResume && capturedText.length > 1) {
-        // Dedup: don't re-execute same command back to back
-        if (capturedText !== lastExecutedCommand) {
-          lastExecutedCommand = capturedText;
-          reasoningBox.innerHTML = `<strong>Voice Command:</strong> "${escapeHtml(capturedText)}"`;
-          handleSendCommand();
+      // Retrieve high-fidelity 16kHz PCM audio from offscreen and transcribe via local Whisper
+      chrome.runtime.sendMessage({ target: 'offscreen', type: 'stop_audio_recording' }, async (res) => {
+        if (res && res.audio_base64) {
+          try {
+            updateStatus('thinking', 'Transcribing with local Whisper AI...');
+            const vResp = await fetch('http://127.0.0.1:5000/api/voice', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ audio_base64: res.audio_base64 })
+            });
+            if (vResp.ok) {
+              const vJson = await vResp.json();
+              if (vJson.text && vJson.text.trim().length > 1) {
+                commandInput.value = vJson.text.trim();
+                handleSpeechTranscriptUpdate(vJson.text.trim());
+                reasoningBox.innerHTML = `<strong>Whisper Voice:</strong> "${escapeHtml(vJson.text.trim())}"`;
+                handleSendCommand();
+                return;
+              }
+            }
+          } catch (whisperErr) {
+            console.log('[Popup] Whisper audio transcription error, using speech fallback:', whisperErr.message);
+          }
+        }
+
+        // Fallback to text captured by web speech
+        const capturedText = commandInput.value.trim();
+        const isAlwaysOnResume = capturedText.toLowerCase().startsWith('🟣');
+        if (capturedText && !capturedText.toLowerCase().startsWith('listening') && !isAlwaysOnResume && capturedText.length > 1) {
+          if (capturedText !== lastExecutedCommand) {
+            lastExecutedCommand = capturedText;
+            reasoningBox.innerHTML = `<strong>Voice Command:</strong> "${escapeHtml(capturedText)}"`;
+            handleSendCommand();
+          } else {
+            scheduleAutoResumeListen();
+          }
+        } else if (!alwaysOnMode) {
+          reasoningBox.innerHTML = `<em>No speech recognized. Tap mic and try speaking clearly, or type below.</em>`;
         } else {
           scheduleAutoResumeListen();
         }
-      } else if (!alwaysOnMode) {
-        reasoningBox.innerHTML = `<em>No speech recognized. Tap mic and try speaking clearly, or type below.</em>`;
-      } else {
-        // In always-on mode, no speech = just resume listening again
-        scheduleAutoResumeListen();
-      }
+      });
 
       if (!alwaysOnMode) updateStatus('online', 'Agent Ready');
     }
@@ -712,23 +1226,52 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Command Submission Handler
   function handleSendCommand() {
-    const text = commandInput.value.trim();
-    if (!text) return;
+    let rawInput = commandInput.value.trim();
+    if (!rawInput && !attachedDocument) return;
+
+    // Check if user is asking to summarize, synthesize, or explain document/webpage
+    const isSummarizeIntent = (
+      /\b(?:summariz|summeriz|summerzi|summaris|sumariz|sumary|summary|summaries|tldr|takeaway|takeaways|overview|key\s*points)\b/i.test(rawInput) ||
+      (/\b(?:explain|analyze|analyse|what\s+is\s+in|tell\s+me\s+about|read)\b/i.test(rawInput) && /\b(?:pdf|doc|document|page|site|website|article|paper|file)\b/i.test(rawInput)) ||
+      (attachedDocument && (!rawInput || /\b(?:process|read|check|review|understand|summarize|summerzie|explain)\b/i.test(rawInput)))
+    );
+
+    if (isSummarizeIntent) {
+      const promptToRun = rawInput || (attachedDocument ? `Summarize ${attachedDocument.name}` : 'Summarize active page');
+      commandInput.value = '';
+      executeSummarizationWorkflow(promptToRun);
+      return;
+    }
+
+    let text = rawInput;
+    const originalGoal = text || (attachedDocument ? `Process and summarize ${attachedDocument.name}` : 'Run task');
+
+    if (attachedDocument && attachedDocument.extractedText) {
+      text = text
+        ? `${text}\n\n[ATTACHED DOCUMENT CONTENT FROM ${attachedDocument.name}]:\n${attachedDocument.extractedText}`
+        : `Please process, analyze and summarize the attached document (${attachedDocument.name}):\n\n${attachedDocument.extractedText}`;
+    }
 
     // Clear previous execution state
     planStepsList.innerHTML = '';
     planStepsContainer.style.display = 'none';
     planMeta.style.display = 'none';
 
-    reasoningBox.innerHTML = `<strong>Planning:</strong> Analyzing active page DOM elements for "${escapeHtml(text)}"...`;
+    reasoningBox.innerHTML = `<strong>Planning:</strong> Analyzing active page DOM elements for "${escapeHtml(originalGoal)}"...`;
     updateStatus('thinking', 'Planning actions for command...');
+    speakAgentMessage('Starting task: ' + originalGoal);
 
     chrome.runtime.sendMessage({
       type: 'command',
       payload: {
         text,
         source: 'text',
-        language: 'auto'
+        language: 'auto',
+        attached_document: attachedDocument ? {
+          name: attachedDocument.name,
+          type: attachedDocument.type,
+          size: attachedDocument.size
+        } : null
       }
     });
   }
@@ -795,13 +1338,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const STATUS_ICONS = {
       pending: '⏳',
       running: '▶',
+      paused: '⏸️',
       done: '✓',
       skipped: '↩',
       failed: '✗'
     };
     const STATUS_COLORS = {
       pending: '#9ca3af',
-      running: '#f59e0b',
+      running: '#3b82f6',
+      paused: '#d97706',
       done: '#059669',
       skipped: '#6b7280',
       failed: '#ef4444'
@@ -809,21 +1354,58 @@ document.addEventListener('DOMContentLoaded', () => {
 
     steps.forEach((step, idx) => {
       const stepDiv = document.createElement('div');
-      stepDiv.className = 'step-item' + (step.status === 'done' ? ' done' : '');
+      const isPaused = step.status === 'paused';
+      const isDone = step.status === 'done';
+      const isActive = step.status === 'running';
+
+      stepDiv.className = 'step-item' + (isDone ? ' done' : '') + (isPaused ? ' paused' : '');
       stepDiv.id = `sq-step-${step.id}`;
+
+      if (isPaused) {
+        stepDiv.style.border = '1.5px solid #f59e0b';
+        stepDiv.style.background = '#fffbeb';
+        stepDiv.style.borderRadius = '8px';
+        stepDiv.style.padding = '10px';
+      }
 
       const icon = STATUS_ICONS[step.status] || '⏳';
       const color = STATUS_COLORS[step.status] || '#9ca3af';
-      const isActive = step.status === 'running';
 
       stepDiv.innerHTML = `
-        <div class="step-info" style="display:flex; align-items:center; gap:6px; ${isActive ? 'animation: pulse 1s infinite;' : ''}">
-          <span style="font-weight:700; color:${color}; font-size:13px;">${icon}</span>
-          <span style="font-weight:600; font-size:10px; background:#ffe4e6; color:#e11d48; padding:1px 5px; border-radius:4px;">${(idx + 1)}</span>
-          <span style="color:${isActive ? '#e11d48' : 'inherit'}; font-weight:${isActive ? '600' : '400'};">${escapeHtml(step.label)}</span>
+        <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
+          <div class="step-info" style="display:flex; align-items:center; gap:6px; ${isActive ? 'animation: pulse 1s infinite;' : ''}">
+            <span style="font-weight:700; color:${color}; font-size:13px;">${icon}</span>
+            <span style="font-weight:600; font-size:10px; background:${isPaused ? '#fef3c7' : '#ffe4e6'}; color:${isPaused ? '#b45309' : '#e11d48'}; padding:1px 5px; border-radius:4px;">${(idx + 1)}</span>
+            <span style="color:${isPaused ? '#92400e' : (isActive ? '#3b82f6' : 'inherit')}; font-weight:${(isActive || isPaused) ? '600' : '400'};">${escapeHtml(step.label)}</span>
+          </div>
+          <span style="font-size:10px; font-weight:700; color:${color}; background:${isPaused ? '#fef3c7' : 'transparent'}; padding:${isPaused ? '2px 6px' : '0'}; border-radius:4px;">${step.status.toUpperCase()}</span>
         </div>
-        <span style="font-size:10px; font-weight:700; color:${color};">${step.status.toUpperCase()}</span>
       `;
+
+      if (isPaused) {
+        const resumeContainer = document.createElement('div');
+        resumeContainer.style.cssText = 'margin-top: 8px; padding: 10px; background: #ffffff; border: 1px solid #fde68a; border-radius: 8px; display: flex; flex-direction: column; gap: 8px; width: 100%; box-sizing: border-box;';
+        resumeContainer.innerHTML = `
+          <div style="font-size: 11px; font-weight: 600; color: #92400e; display: flex; align-items: center; gap: 5px;">
+            <span>⏸️</span>
+            <span>Sign in to your account in the browser, then click below:</span>
+          </div>
+          <button id="inline-hitl-resume-btn-${step.id}" style="width: 100%; padding: 9px 12px; font-size: 12px; font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3); display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s ease;">
+            <span>✅</span>
+            <span>I've Signed In — Continue Task</span>
+          </button>
+        `;
+        const inlineBtn = resumeContainer.querySelector(`#inline-hitl-resume-btn-${step.id}`);
+        inlineBtn.addEventListener('click', () => {
+          inlineBtn.disabled = true;
+          inlineBtn.innerHTML = '<span>⚡</span><span>Resuming task...</span>';
+          updateStatus('acting', 'Resuming task execution...');
+          speakAgentMessage('Resuming execution');
+          chrome.runtime.sendMessage({ type: 'resume_step_queue' });
+        });
+        stepDiv.appendChild(resumeContainer);
+      }
+
       planStepsList.appendChild(stepDiv);
     });
 
@@ -877,16 +1459,32 @@ document.addEventListener('DOMContentLoaded', () => {
         label.textContent = msg ? `🧠 ${msg.slice(0, 45)}` : 'Thinking...';
       } else if (state === 'acting') {
         label.textContent = msg ? `⚡ ${msg.slice(0, 45)}` : 'Executing...';
+      } else if (state === 'waiting_user_input') {
+        label.textContent = '⏸️ Action Required';
+        statusIndicator.style.background = 'rgba(245, 158, 11, 0.2)';
+        statusIndicator.style.borderColor = '#f59e0b';
       } else if (state === 'error') {
         label.textContent = msg ? `⚠ ${msg.slice(0, 40)}` : 'Error';
       } else {
         label.textContent = msg ? msg.slice(0, 45) : 'Ready';
+        statusIndicator.style.background = '';
+        statusIndicator.style.borderColor = '';
       }
     }
     // Also update reasoning box with live status message
-    if (msg && (state === 'thinking' || state === 'acting') && reasoningBox) {
-      const icon = state === 'acting' ? '👁️' : '🧠';
+    if (msg && (state === 'thinking' || state === 'acting' || state === 'waiting_user_input') && reasoningBox) {
+      const icon = state === 'acting' ? '👁️' : (state === 'waiting_user_input' ? '⏸️' : '🧠');
       reasoningBox.innerHTML = `<strong>${icon} Agent:</strong> ${escapeHtml(msg)}`;
+    }
+
+    if (msg) {
+      if (state === 'waiting_user_input') {
+        speakAgentMessage('I have paused at the login screen. Please complete sign in in the browser to continue.');
+      } else if (msg.includes('Accepted!') || msg.includes('All testcases passed')) {
+        speakAgentMessage('Accepted! All testcases passed successfully.');
+      } else if (msg.includes('Goal complete') || msg.includes('Task complete') || msg.includes('✓ Goal completed')) {
+        speakAgentMessage('Task completed successfully.');
+      }
     }
   }
 

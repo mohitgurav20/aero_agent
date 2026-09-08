@@ -27,7 +27,8 @@ const jsFiles = [
   'popup.js',
   'pii_detector.js',
   'pii_redactor.js',
-  'permission.js'
+  'permission.js',
+  'summary_viewer.js'
 ];
 jsFiles.forEach(file => {
   const filePath = path.join(srcDir, file);
@@ -41,6 +42,9 @@ jsFiles.forEach(file => {
 fs.copyFileSync(path.join(srcDir, 'popup.html'), path.join(distDir, 'popup.html'));
 fs.copyFileSync(path.join(srcDir, 'popup.css'), path.join(distDir, 'popup.css'));
 fs.copyFileSync(path.join(srcDir, 'offscreen.html'), path.join(distDir, 'offscreen.html'));
+if (fs.existsSync(path.join(srcDir, 'summary_viewer.html'))) {
+  fs.copyFileSync(path.join(srcDir, 'summary_viewer.html'), path.join(distDir, 'summary_viewer.html'));
+}
 if (fs.existsSync(path.join(srcDir, 'permission.html'))) {
   fs.copyFileSync(path.join(srcDir, 'permission.html'), path.join(distDir, 'permission.html'));
 }

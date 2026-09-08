@@ -28,6 +28,7 @@
         </div>
       </div>
       <div style="display: flex; align-items: center; gap: 6px;">
+        <button id="voice-reply-btn" title="Toggle Interactive Voice Replies (TTS)" style="background: rgba(244, 63, 94, 0.12); border: 1px solid rgba(244, 63, 94, 0.35); border-radius: 6px; cursor: pointer; color: #f43f5e; font-size: 13px; padding: 4px 7px; display: flex; align-items: center; transition: all 0.2s ease;">🔊</button>
         <button id="reload-ext-btn" title="Reload Extension & Service Worker" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; cursor: pointer; color: #94a3b8; font-size: 13px; padding: 4px 7px; display: flex; align-items: center; transition: all 0.2s ease;">🔄</button>
         <div id="status-indicator" class="status-pill">
           <span class="status-dot"></span>
@@ -37,7 +38,7 @@
     </header>
 
     <!-- System Status Badges: Privacy Filter & Local Gateway -->
-    <div class="system-badges-row" style="display: flex; gap: 8px; margin: -6px 0 12px 0; font-size: 11px;">
+    <div class="system-badges-row" style="display: flex; gap: 8px; margin: -6px 0 8px 0; font-size: 11px;">
       <div id="privacy-badge" class="privacy-pill" style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 9999px; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #10b981; font-weight: 600;">
         <span>🛡️</span>
         <span>Privacy Filter: Active</span>
@@ -48,9 +49,20 @@
       </div>
     </div>
 
-    <!-- Text Input Box -->
+    <!-- Navigation Tabs -->
+    <nav class="app-nav-tabs" style="display: flex; gap: 6px; margin-bottom: 10px; background: rgba(0,0,0,0.04); padding: 3px; border-radius: 10px; border: 1px solid var(--border-soft);">
+      <button class="nav-tab active" data-tab="actions" id="tab-btn-actions" style="flex: 1; padding: 6px 6px; font-size: 11px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; background: #ffffff; color: var(--pink-600); box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: all 0.2s ease;">⚡ Actions</button>
+      <button class="nav-tab" data-tab="hitl" id="tab-btn-hitl" style="flex: 1; padding: 6px 6px; font-size: 11px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; background: transparent; color: var(--text-muted); transition: all 0.2s ease; display: inline-flex; align-items: center; justify-content: center; gap: 4px;">
+        <span>⚠️ Action Req.</span>
+        <span id="hitl-badge" style="display: none; width: 7px; height: 7px; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 6px #f59e0b;"></span>
+      </button>
+    </nav>
+
+    <!-- Text & Document Input Box -->
     <section class="input-card">
-      <div class="input-wrapper">
+      <div class="input-wrapper" style="display: flex; align-items: center; gap: 4px;">
+        <input type="file" id="doc-file-input" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.md,.json,.csv" style="display: none;" />
+        <button id="doc-upload-btn" class="upload-btn" title="Attach Document (PDF, Image, Text)" style="background: none; border: none; cursor: pointer; font-size: 16px; padding: 0 6px; color: var(--text-muted); display: flex; align-items: center; transition: color 0.2s ease;" type="button">📎</button>
         <input
           type="text"
           id="command-input"
@@ -58,6 +70,7 @@
           placeholder="Ask me to do anything on this page..."
           autocomplete="off"
           spellcheck="false"
+          style="flex: 1;"
         />
         <button id="send-btn" class="send-btn" title="Execute Command">
           <span>Run</span>
@@ -69,106 +82,181 @@
       </div>
     </section>
 
-    <!-- Large Voice Action Section -->
-    <section class="voice-centerpiece">
-      <div class="mic-button-wrapper">
-        <button id="mic-btn" class="large-mic-btn" title="Click to Speak">
-          <div class="mic-pulse-ring"></div>
-          <div class="mic-pulse-ring ring-2"></div>
-          <div class="mic-icon-inner">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-              <line x1="12" y1="19" x2="12" y2="22"/>
-            </svg>
+    <!-- Uploaded File Badge -->
+    <div id="attached-file-badge" style="display: none; align-items: center; justify-content: space-between; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 5px 10px; font-size: 11px; color: #1d4ed8; margin: -6px 0 6px 0;">
+      <div style="display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+        <span id="attached-file-icon">📄</span>
+        <span id="attached-file-name" style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; max-width: 200px;">report.pdf</span>
+        <span id="attached-file-size" style="color: #64748b; font-size: 10px;">(24 KB)</span>
+      </div>
+      <button id="remove-attached-file-btn" title="Remove attachment" style="background: none; border: none; cursor: pointer; color: #94a3b8; font-size: 14px; line-height: 1; padding: 0 2px;">✕</button>
+    </div>
+
+    <!-- Tab 1: Actions & Execution View -->
+    <div id="tab-view-actions" style="display: flex; flex-direction: column; gap: 12px;">
+      <!-- Large Voice Action Section -->
+      <section class="voice-centerpiece">
+        <div class="mic-button-wrapper">
+          <button id="mic-btn" class="large-mic-btn" title="Click to Speak">
+            <div class="mic-pulse-ring"></div>
+            <div class="mic-pulse-ring ring-2"></div>
+            <div class="mic-icon-inner">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="22"/>
+              </svg>
+            </div>
+          </button>
+        </div>
+        <div class="mic-hint-text">
+          <span id="mic-status-label">Tap to speak in English, Hindi, or Kannada</span>
+        </div>
+      </section>
+
+      <!-- Live Speech Transcription Box -->
+      <section id="voice-recording-bar" class="live-transcript-card hidden">
+        <div class="transcript-header">
+          <div class="wave-visualizer">
+            <span></span><span></span><span></span><span></span><span></span>
           </div>
+          <span class="transcript-badge">Live Voice</span>
+          <span id="recording-timer" class="recording-timer">0:00</span>
+          <button id="voice-stop-btn" class="stop-pill-btn">Done</button>
+        </div>
+        <div class="transcript-body">
+          <p id="live-transcript" class="transcript-text">Listening to your voice...</p>
+        </div>
+      </section>
+
+      <!-- Agent Activity & Action Description Card -->
+      <section class="action-card">
+        <div class="card-header">
+          <div class="card-title-group">
+            <span class="card-icon">⚡</span>
+            <h2 class="card-title">Agent Actions</h2>
+          </div>
+          <div id="plan-meta" class="meta-tags" style="display: none;">
+            <span id="confidence-badge" class="tag tag-pink">98% Match</span>
+            <span id="source-badge" class="tag tag-gray">On-Device</span>
+          </div>
+        </div>
+
+        <div id="reasoning-box" class="reasoning-container">
+          <p class="empty-state">Type a command or tap the microphone to start.</p>
+        </div>
+
+        <!-- Inline Sign-in / Verification Required Banner (Visible directly on Actions tab when paused) -->
+        <div id="inline-hitl-card" style="display: none; background: rgba(245, 158, 11, 0.12); border: 1.5px solid #f59e0b; border-radius: 12px; padding: 12px; margin: 10px 0; flex-direction: column; gap: 8px;">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span style="font-size: 16px;">⏸️</span>
+              <span id="inline-hitl-title" style="font-weight: 700; font-size: 12px; color: #b45309;">Sign-in / Verification Required</span>
+            </div>
+            <span style="font-size: 10px; font-weight: 700; background: #f59e0b; color: white; padding: 2px 7px; border-radius: 4px;">PAUSED</span>
+          </div>
+          <p id="inline-hitl-desc" style="margin: 0; font-size: 11.5px; color: #78350f; line-height: 1.45;">
+            The agent reached a login or verification screen. Complete sign-in in your browser window, then click Continue:
+          </p>
+          <button id="inline-hitl-continue-btn" style="width: 100%; padding: 9px; font-size: 12.5px; font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 3px 10px rgba(16, 185, 129, 0.3); display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s ease;">
+            <span>✅</span>
+            <span>I've Signed In in Browser — Continue Task</span>
+          </button>
+        </div>
+
+        <!-- Live Step Progress List -->
+        <div id="plan-steps-container" class="steps-container" style="display: none;">
+          <div class="steps-heading">
+            <span>Executing Steps</span>
+            <span class="steps-badge">Sub-200ms</span>
+          </div>
+          <div id="plan-steps-list" class="steps-list"></div>
+        </div>
+
+        <!-- Persistent Generated Email / Artifact Card -->
+        <div id="generated-artifact-card" style="display:none; flex-direction:column; gap:8px;
+             background:#ffffff; border:1.5px solid #10b981; border-radius:12px; padding:12px 14px;
+             margin:10px 0; box-shadow:0 4px 14px rgba(16,185,129,0.15); animation:fadeSlideIn 0.3s ease;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:12px; color:#065f46;">
+              <span>✉️</span>
+              <span id="artifact-sent-label">Email Composed in Gmail</span>
+            </div>
+          </div>
+          
+          <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:6px 10px; font-size:11px;">
+            <div style="margin-bottom:3px;"><strong style="color:#374151;">To:</strong> <span id="artifact-recipient" style="color:#2563eb; font-family:monospace;"></span></div>
+            <div><strong style="color:#374151;">Subject:</strong> <span id="artifact-subject" style="color:#111827; font-weight:600;"></span></div>
+          </div>
+
+          <div id="artifact-content" style="max-height:160px; overflow-y:auto; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; font-size:11px; color:#334155; line-height:1.45; white-space:pre-wrap; word-break:break-word;"></div>
+          
+          <div style="font-size:10px; color:#059669; font-weight:500; display:flex; align-items:center; gap:4px;">
+            <span>✓</span> Composed &amp; ready in Gmail
+          </div>
+        </div>
+      </section>
+
+      <!-- Action Tools Bar -->
+      <div class="utility-row">
+        <button id="summarize-page-btn" class="util-btn" title="Summarize Page or Attached PDF with Floating Pop-Up">
+          <span style="color: var(--pink-600);">⚡</span>
+          <span>Summarize</span>
+        </button>
+        <button id="toggle-tags-btn" class="util-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px">
+            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+            <line x1="7" y1="7" x2="7.01" y2="7"/>
+          </svg>
+          Highlight Elements
+        </button>
+        <button id="verify-log-btn" class="util-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+          Audit Log
         </button>
       </div>
-      <div class="mic-hint-text">
-        <span id="mic-status-label">Tap to speak in English, Hindi, or Kannada</span>
-      </div>
-    </section>
+    </div>
 
-    <!-- Live Speech Transcription Box -->
-    <section id="voice-recording-bar" class="live-transcript-card hidden">
-      <div class="transcript-header">
-        <div class="wave-visualizer">
-          <span></span><span></span><span></span><span></span><span></span>
-        </div>
-        <span class="transcript-badge">Live Voice</span>
-        <span id="recording-timer" class="recording-timer">0:00</span>
-        <button id="voice-stop-btn" class="stop-pill-btn">Done</button>
-      </div>
-      <div class="transcript-body">
-        <p id="live-transcript" class="transcript-text">Listening to your voice...</p>
-      </div>
-    </section>
-
-    <!-- Agent Activity & Action Description Card -->
-    <section class="action-card">
-      <div class="card-header">
-        <div class="card-title-group">
-          <span class="card-icon">⚡</span>
-          <h2 class="card-title">Agent Actions</h2>
-        </div>
-        <div id="plan-meta" class="meta-tags" style="display: none;">
-          <span id="confidence-badge" class="tag tag-pink">98% Match</span>
-          <span id="source-badge" class="tag tag-gray">On-Device</span>
-        </div>
-      </div>
-
-      <div id="reasoning-box" class="reasoning-container">
-        <p class="empty-state">Type a command or tap the microphone to start.</p>
-      </div>
-
-      <!-- Live Step Progress List -->
-      <div id="plan-steps-container" class="steps-container" style="display: none;">
-        <div class="steps-heading">
-          <span>Executing Steps</span>
-          <span class="steps-badge">Sub-200ms</span>
-        </div>
-        <div id="plan-steps-list" class="steps-list"></div>
-      </div>
-
-      <!-- Persistent Generated Email / Artifact Card -->
-      <div id="generated-artifact-card" style="display:none; flex-direction:column; gap:8px;
-           background:#ffffff; border:1.5px solid #10b981; border-radius:12px; padding:12px 14px;
-           margin:10px 0; box-shadow:0 4px 14px rgba(16,185,129,0.15); animation:fadeSlideIn 0.3s ease;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:12px; color:#065f46;">
-            <span>✉️</span>
-            <span id="artifact-sent-label">Email Composed in Gmail</span>
+    <!-- Tab 2: Interactive Human-In-The-Loop (HITL) Drawer -->
+    <div id="tab-view-hitl" style="display: none; flex-direction: column; gap: 12px;">
+      <div style="background: rgba(245, 158, 11, 0.12); border: 1.5px solid #f59e0b; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 20px;">⏸️</span>
+          <div>
+            <h3 id="hitl-banner-title" style="font-size: 13px; font-weight: 700; color: #b45309; margin: 0;">Sign-in / Verification Required</h3>
+            <p id="hitl-banner-sub" style="font-size: 11px; color: #78350f; margin: 2px 0 0 0;">The agent has paused for your safety &amp; credentials</p>
           </div>
         </div>
-        
-        <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:6px 10px; font-size:11px;">
-          <div style="margin-bottom:3px;"><strong style="color:#374151;">To:</strong> <span id="artifact-recipient" style="color:#2563eb; font-family:monospace;"></span></div>
-          <div><strong style="color:#374151;">Subject:</strong> <span id="artifact-subject" style="color:#111827; font-weight:600;"></span></div>
+        <p id="hitl-banner-desc" style="font-size: 12px; color: #92400e; line-height: 1.45; background: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid #fde68a; margin: 0;">
+          The agent reached a login screen or verification step. Please enter your credentials or complete sign-in in your browser window, then click Continue below.
+        </p>
+
+        <!-- Primary Action: User manually signed in -->
+        <button id="hitl-continue-btn" style="width: 100%; padding: 10px; font-size: 13px; font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 10px; cursor: pointer; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s ease;">
+          <span>✅</span>
+          <span>I've Signed In in Browser — Continue Task</span>
+        </button>
+
+        <!-- One-Click SSO Options -->
+        <div id="hitl-sso-container" style="display: flex; flex-direction: column; gap: 6px; margin-top: 4px;">
+          <span style="font-size: 11px; font-weight: 600; color: #92400e;">⚡ One-Click SSO Options:</span>
+          <div id="hitl-sso-buttons" style="display: flex; flex-wrap: wrap; gap: 6px;">
+            <button class="clarify-sso-chip" data-sso="Google" style="padding: 6px 11px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid #fed7aa; background: #fff; cursor: pointer; color: #9a3412;">Continue with Google</button>
+            <button class="clarify-sso-chip" data-sso="Apple" style="padding: 6px 11px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid #fed7aa; background: #fff; cursor: pointer; color: #9a3412;">Continue with Apple</button>
+            <button class="clarify-sso-chip" data-sso="phone" style="padding: 6px 11px; font-size: 11px; font-weight: 600; border-radius: 6px; border: 1px solid #fed7aa; background: #fff; cursor: pointer; color: #9a3412;">Continue with phone</button>
+          </div>
         </div>
 
-        <div id="artifact-content" style="max-height:160px; overflow-y:auto; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; font-size:11px; color:#334155; line-height:1.45; white-space:pre-wrap; word-break:break-word;"></div>
-        
-        <div style="font-size:10px; color:#059669; font-weight:500; display:flex; align-items:center; gap:4px;">
-          <span>✓</span> Composed &amp; ready in Gmail
+        <!-- Manual Credential Inputs (Optional convenience) -->
+        <div id="hitl-creds-box" style="background: #ffffff; border: 1px solid #fed7aa; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px;">
+          <span style="font-size: 11px; font-weight: 700; color: #b45309;">🔑 Or Provide Credentials to Fill:</span>
+          <input type="text" id="hitl-username-input" placeholder="Username or Email..." style="padding: 6px 8px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 11px;" />
+          <input type="password" id="hitl-password-input" placeholder="Password..." style="padding: 6px 8px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 11px;" />
+          <button id="hitl-submit-creds-btn" style="padding: 7px; background: #f59e0b; color: white; font-size: 11px; font-weight: 700; border: none; border-radius: 6px; cursor: pointer;">Fill &amp; Continue Task</button>
         </div>
       </div>
-    </section>
-
-    <!-- Action Tools Bar -->
-    <div class="utility-row">
-      <button id="toggle-tags-btn" class="util-btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px">
-          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-          <line x1="7" y1="7" x2="7.01" y2="7"/>
-        </svg>
-        Highlight Elements
-      </button>
-      <button id="verify-log-btn" class="util-btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-        </svg>
-        Audit Log
-      </button>
     </div>
 
     <!-- Autonomous Agent Clarification Card -->
