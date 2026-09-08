@@ -867,31 +867,8 @@ def decompose_goal():
         "    - The agent navigates to the login/site page, then uses 'wait_for_user' to safely pause and wait for the user to sign in:\n"
         '      * {"type": "navigate", "url": "<site_login_url>", "label": "Open login page"}\n'
         '      * {"type": "wait_for_user", "label": "Please sign in to your account, then click Continue"}\n'
-        "11. X (Twitter): https://x.com/ or https://x.com/login for login, https://x.com/search?q=<query> for search\n"
-        "12. Chess & Online Games (Chess.com, Lichess):\n"
-        "    - Playing online chess against computer/bots or online opponents with LLM intelligence:\n"
-        "      * If current_url is already on chess.com/play/computer, click 'Play' or 'Choose'.\n"
-        "      * If current_url is on chess.com/home, click 'Play Bots' or 'Start Game'.\n"
-        "      * If not on chess.com, navigate to https://www.chess.com/play/computer\n"
-        "      * Start the match by clicking 'Play Choose Start Game'.\n"
-        "      * Then execute intelligent opening and development moves using 'chess_move' steps:\n"
-        "        - Move 1: {\"type\": \"chess_move\", \"from\": \"e2\", \"to\": \"e4\", \"move\": \"e4\", \"label\": \"Play opening move: King's Pawn to e4 with LLM intelligence\"}\n"
-        "        - Move 2: {\"type\": \"wait\", \"value\": 1800, \"label\": \"Wait for opponent response\"}\n"
-        "        - Move 3: {\"type\": \"chess_move\", \"from\": \"g1\", \"to\": \"f3\", \"move\": \"Nf3\", \"label\": \"Develop Knight to f3 with LLM intelligence\"}\n"
-        "        - Move 4: {\"type\": \"wait\", \"value\": 1800, \"label\": \"Wait for opponent response\"}\n"
-        "        - Move 5: {\"type\": \"chess_move\", \"from\": \"f1\", \"to\": \"c4\", \"move\": \"Bc4\", \"label\": \"Develop Bishop to c4 (Italian Game) with LLM intelligence\"}\n\n"
+        "11. X (Twitter): https://x.com/ or https://x.com/login for login, https://x.com/search?q=<query> for search\n\n"
         "Examples:\n"
-        'Goal: "open online chess and play the game online with llm intellegence"\n'
-        "JSON:\n"
-        "[\n"
-        '  {"type": "navigate", "url": "https://www.chess.com/play/computer", "label": "Open Chess vs Computer"},\n'
-        '  {"type": "click", "target": "Play Choose Start Game", "label": "Start chess game against bot"},\n'
-        '  {"type": "chess_move", "from": "e2", "to": "e4", "move": "e4", "label": "Play opening move: e4 with LLM intelligence"},\n'
-        '  {"type": "wait", "value": 1800, "label": "Wait for opponent response"},\n'
-        '  {"type": "chess_move", "from": "g1", "to": "f3", "move": "Nf3", "label": "Develop Knight to f3 with LLM intelligence"},\n'
-        '  {"type": "wait", "value": 1800, "label": "Wait for opponent response"},\n'
-        '  {"type": "chess_move", "from": "f1", "to": "c4", "move": "Bc4", "label": "Develop Bishop to c4 (Italian Game) with LLM intelligence"}\n'
-        "]\n\n"
         'Goal: "open x website and login and search for open ai"\n'
         "JSON:\n"
         "[\n"
@@ -920,41 +897,6 @@ def decompose_goal():
         "JSON Steps:"
     )
 
-    # Deterministic fast path for chess gameplay commands to ensure multi-step play is never stubbed out
-    goal_lower = goal.lower()
-    if "chess" in goal_lower and ("play" in goal_lower or "game" in goal_lower or "move" in goal_lower):
-        chess_steps = []
-        is_computer = "chess.com/play/computer" in current_url
-        is_play_menu = "/play" in current_url and not is_computer
-        is_home = "chess.com/home" in current_url or current_url.endswith("chess.com") or current_url.endswith("chess.com/")
-
-        if is_computer:
-            # Already on the live computer game screen (e.g. against Cliff bot)
-            chess_steps.append({
-                "type": "play_chess_continuous",
-                "label": "Autonomously play chess against bot with LLM intelligence until game over"
-            })
-        elif is_play_menu or is_home:
-            chess_steps.append({"type": "click", "target": "Play Bots", "label": "Click Play Bots to open bot match"})
-            chess_steps.append({"type": "wait", "value": 2000, "label": "Wait for bot selection to load"})
-            chess_steps.append({"type": "click", "target": "Play Choose Start Game", "label": "Start chess match against bot"})
-            chess_steps.append({"type": "wait", "value": 2500, "label": "Wait for live chess board to initialize"})
-            chess_steps.append({
-                "type": "play_chess_continuous",
-                "label": "Autonomously play chess against bot with LLM intelligence until game over"
-            })
-        else:
-            chess_steps.append({"type": "navigate", "url": "https://www.chess.com/play/computer", "label": "Open Chess vs Computer"})
-            chess_steps.append({"type": "wait", "value": 2000, "label": "Wait for chess page to load"})
-            chess_steps.append({"type": "click", "target": "Play Choose Start Game", "label": "Start chess match against bot"})
-            chess_steps.append({"type": "wait", "value": 2500, "label": "Wait for live chess board to initialize"})
-            chess_steps.append({
-                "type": "play_chess_continuous",
-                "label": "Autonomously play chess against bot with LLM intelligence until game over"
-            })
-
-        return jsonify({"status": "success", "steps": chess_steps, "source": "domain-planner"})
-
     for role in ("text", "draft"):
         try:
             resp = ollama_client.generate(
@@ -978,9 +920,6 @@ def decompose_goal():
                                 "field": s.get("field"),
                                 "value": s.get("value"),
                                 "key": s.get("key"),
-                                "from": s.get("from"),
-                                "to": s.get("to"),
-                                "move": s.get("move"),
                                 "topic": s.get("topic"),
                                 "language": s.get("language"),
                                 "direction": s.get("direction"),

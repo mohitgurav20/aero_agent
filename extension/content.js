@@ -730,149 +730,9 @@
     }
 
     await sleep(200);
-    try {
-      clickableParent.style.outline = prevOutline;
-      clickableParent.style.transition = prevTransition;
-    } catch (e) { }
+    clickableParent.style.outline = prevOutline;
+    clickableParent.style.transition = prevTransition;
     removeTargetReticle();
-  }
-
-  /**
-   * Autonomous Chess & Board Game Move Executor
-   * Simulates pointer/mouse interactions across modern web chessboards (Chess.com, Lichess, etc.)
-   */
-  async function executeChessMove(fromSq, toSq, moveName) {
-    if (!fromSq || !toSq) return false;
-    const colMap = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
-    const fromCol = colMap[fromSq[0].toLowerCase()] || 5;
-    const fromRow = parseInt(fromSq[1], 10) || 2;
-    const toCol = colMap[toSq[0].toLowerCase()] || 5;
-    const toRow = parseInt(toSq[1], 10) || 4;
-
-    const boardEl = document.querySelector('chess-board, wc-chess-board, #board-single, .board, #board-layout-main, div.main-board, div.board-container');
-    if (!boardEl) {
-      console.warn('[Chess] Board element not found on page');
-      return false;
-    }
-
-    // 0. Programmatic chess.com game controller API if exposed
-    try {
-      if (boardEl.game && typeof boardEl.game.userMove === 'function') {
-        boardEl.game.userMove(fromSq + toSq);
-        console.log('[Chess] Moved via boardEl.game.userMove');
-        return true;
-      }
-      if (boardEl.game && typeof boardEl.game.move === 'function') {
-        boardEl.game.move({ from: fromSq, to: toSq });
-        console.log('[Chess] Moved via boardEl.game.move');
-        return true;
-      }
-    } catch (e) {}
-
-    try {
-      boardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    } catch (e) {}
-    await sleep(200);
-
-    const rect = boardEl.getBoundingClientRect();
-    const sqW = rect.width / 8;
-    const sqH = rect.height / 8;
-
-    const isFlipped = boardEl.classList.contains('flipped') || document.querySelector('.board.flipped') !== null;
-    const getCoords = (col, row) => {
-      const c = isFlipped ? (8 - col) : (col - 1);
-      const r = isFlipped ? (row - 1) : (8 - row);
-      return {
-        x: Math.round(rect.left + (c + 0.5) * sqW),
-        y: Math.round(rect.top + (r + 0.5) * sqH)
-      };
-    };
-
-    const fromCoord = getCoords(fromCol, fromRow);
-    const toCoord = getCoords(toCol, toRow);
-
-    // 1. Full Pointer & Mouse Event Simulation (Drag + Click)
-    const fromEl = document.elementFromPoint(fromCoord.x, fromCoord.y) || boardEl;
-    const toEl = document.elementFromPoint(toCoord.x, toCoord.y) || boardEl;
-
-    const makePointerEvent = (type, x, y, buttons, pointerId = 1) => {
-      return new PointerEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        view: window,
-        clientX: x,
-        clientY: y,
-        screenX: x,
-        screenY: y,
-        button: 0,
-        buttons,
-        pressure: buttons ? 0.5 : 0,
-        pointerId,
-        pointerType: 'mouse',
-        isPrimary: true
-      });
-    };
-
-    const makeMouseEvent = (type, x, y, buttons) => {
-      return new MouseEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        view: window,
-        clientX: x,
-        clientY: y,
-        screenX: x,
-        screenY: y,
-        button: 0,
-        buttons
-      });
-    };
-
-    console.log(`[Chess] Initiating move ${fromSq} (${fromCoord.x}, ${fromCoord.y}) -> ${toSq} (${toCoord.x}, ${toCoord.y})`);
-
-    // A. Pointerdown on source square
-    fromEl.dispatchEvent(makePointerEvent('pointerdown', fromCoord.x, fromCoord.y, 1));
-    fromEl.dispatchEvent(makeMouseEvent('mousedown', fromCoord.x, fromCoord.y, 1));
-    await sleep(80);
-
-    // B. Pointermove to destination (drag simulation)
-    const midX = Math.round((fromCoord.x + toCoord.x) / 2);
-    const midY = Math.round((fromCoord.y + toCoord.y) / 2);
-    boardEl.dispatchEvent(makePointerEvent('pointermove', midX, midY, 1));
-    boardEl.dispatchEvent(makeMouseEvent('mousemove', midX, midY, 1));
-    await sleep(60);
-
-    boardEl.dispatchEvent(makePointerEvent('pointermove', toCoord.x, toCoord.y, 1));
-    boardEl.dispatchEvent(makeMouseEvent('mousemove', toCoord.x, toCoord.y, 1));
-    await sleep(80);
-
-    // C. Pointerup on destination
-    toEl.dispatchEvent(makePointerEvent('pointerup', toCoord.x, toCoord.y, 0));
-    toEl.dispatchEvent(makeMouseEvent('mouseup', toCoord.x, toCoord.y, 0));
-    await sleep(80);
-
-    // D. Click-to-Move clicks as fallback
-    fromEl.dispatchEvent(makeMouseEvent('click', fromCoord.x, fromCoord.y, 0));
-    await sleep(150);
-    toEl.dispatchEvent(makeMouseEvent('click', toCoord.x, toCoord.y, 0));
-
-    // E. Search inside shadowRoot or DOM for piece element
-    try {
-      const roots = [boardEl.shadowRoot, boardEl, document].filter(Boolean);
-      for (const r of roots) {
-        const p = r.querySelector(`.piece.square-${fromCol}${fromRow}, [class*="square-${fromCol}${fromRow}"]`);
-        const s = r.querySelector(`.square-${toCol}${toRow}, [class*="square-${toCol}${toRow}"]`);
-        if (p && s) {
-          p.click?.();
-          await sleep(150);
-          s.click?.();
-          break;
-        }
-      }
-    } catch (e) {}
-
-    return true;
   }
 
   async function simulateType(element, text) {
@@ -1440,38 +1300,6 @@
       }
     }
 
-    // Dedicated Chess.com & Online Games Play / Start Match handler
-    if (rawTarget.includes('play bots') || rawTarget.includes('start game') || rawTarget.includes('play online') ||
-        rawTarget.includes('play chess') || rawTarget.includes('start chess') || rawTarget.includes('choose start game') ||
-        rawTarget.includes('play choose') || rawTarget.includes('play match') || rawTarget.includes('against bot') ||
-        rawTarget.includes('bots') || window.location.hostname.includes('chess.com')) {
-
-      // A. If target asks for "Play Bots" or on /play menu page, locate the Play Bots card specifically
-      if (rawTarget.includes('bots') || rawTarget.includes('play bots') || window.location.pathname === '/play' || window.location.pathname.endsWith('/play/')) {
-        const playBotsCard = document.querySelector('a[href*="/play/computer"], a[href*="/computer"]') ||
-          Array.from(document.querySelectorAll('a, div, button, [role="button"], span')).find(el => {
-            const t = (el.innerText || el.textContent || '').trim().toLowerCase();
-            return t.startsWith('play bots') || (t.includes('play bots') && t.includes('challenge')) || t === 'play bots';
-          });
-        if (playBotsCard) {
-          const clickable = playBotsCard.closest('a, button, div.index-card, div[role="button"]') || playBotsCard;
-          console.log('[Content] Matched Play Bots card:', clickable);
-          return clickable;
-        }
-      }
-
-      // B. Look for the primary "Play" / "Choose" button on the computer/bot page
-      const chessPlayBtn = document.querySelector('button.ui_v5-button-primary, button[data-cy="new-game-index-play"], button.play-controller-button, [data-cy="play-button"], button.new-game-button, .play-quick-links-button') ||
-        Array.from(document.querySelectorAll('button, div[role="button"], a')).find(el => {
-          const t = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim().toLowerCase();
-          return t === 'play' || t === 'choose' || t === 'start game' || t.startsWith('play') || t.startsWith('choose') || t.startsWith('start game');
-        });
-      if (chessPlayBtn) {
-        console.log('[Content] Matched Chess play button:', chessPlayBtn);
-        return chessPlayBtn;
-      }
-    }
-
     const candidates = Array.from(document.querySelectorAll('button, a, input, select, textarea, [role="button"], [role="link"], div[onclick], span[onclick], iframe, [tabindex]'));
     let best = null;
     let bestScore = 0;
@@ -1717,18 +1545,6 @@
             await sleep(step.value || 1000);
             result.success = true;
             break;
-
-          case 'chess_move': {
-            const fromSq = step.from || 'e2';
-            const toSq = step.to || 'e4';
-            const moveName = step.move || `${fromSq}-${toSq}`;
-            console.log(`[Content] Executing autonomous chess move: ${moveName} (${fromSq} -> ${toSq})`);
-            showHudOverlay(`♟️ AI Playing Move: ${moveName} (${fromSq.toUpperCase()} ➔ ${toSq.toUpperCase()})`);
-            const moved = await executeChessMove(fromSq, toSq, moveName);
-            result.success = moved;
-            result.page_changed = true;
-            break;
-          }
 
           default:
             throw new Error(`Unsupported action type: ${step.action}`);
