@@ -1030,6 +1030,7 @@ def decompose_goal():
                                 "topic": s.get("topic"),
                                 "language": s.get("language"),
                                 "direction": s.get("direction"),
+                                "label": lbl
                             })
 
                     # Online compilers (Programiz) do not have submit/verification buttons; remove stray submit_and_verify

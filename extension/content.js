@@ -802,6 +802,26 @@
       let injected = false;
       try {
         let cmView = null;
+
+        // 1. Direct DOM cmTile lookup (CodeMirror 6 internal DOM mapping)
+        let tile = targetCm.cmTile;
+        if (!tile) {
+          const line = targetCm.querySelector('.cm-line');
+          if (line) tile = line.cmTile;
+        }
+        if (!tile && targetCm.children) {
+          for (const child of targetCm.children) {
+            if (child.cmTile) { tile = child.cmTile; break; }
+          }
+        }
+        if (!tile) {
+          const cmRoot = targetCm.closest('.cm-editor') || document.querySelector('.cm-editor');
+          if (cmRoot && cmRoot.cmTile) tile = cmRoot.cmTile;
+        }
+        if (tile) {
+          cmView = tile.root?.view || tile.view;
+        }
+
         let cur = targetCm;
         while (cur && !cmView) {
           if (cur.cmView?.view) cmView = cur.cmView.view;

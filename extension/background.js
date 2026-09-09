@@ -1695,13 +1695,19 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
           const progIndex = normalized.indexOf(progNavStep);
           const hasProgType = normalized.slice(progIndex + 1).some(s => s.type === 'type' && (s.field?.includes('code') || s.field?.includes('editor') || (s.label || '').toLowerCase().includes('write')));
           const hasProgRun = normalized.slice(progIndex + 1).some(s => (s.target === 'Run Compile Execute' || (s.label || '').toLowerCase().includes('run')));
-          if (!hasProgType && /\b(?:code|complie|compile|run)\b/i.test(query)) {
-            const topic = normalized.find(s => s.topic)?.topic || 'Algorithm';
+          if (!hasProgType && /\b(?:code|complie|compile|run|write|solve)\b/i.test(query)) {
+            let topic = normalized.find(s => s.topic && !/^(?:algorithm|solution|code)$/i.test(s.topic))?.topic;
+            if (!topic) {
+              const m = query.match(/(?:write|solve|code|implement|for)\s+(?:a\s+|an\s+)?([a-zA-Z0-9_\-\s]+?)(?:\s+in\s+[a-zA-Z\+\#]+|\s+and\s+run|\s+on\s+programiz|$)/i);
+              if (m) topic = m[1].replace(/\b(?:programiz|programize|compiler|code|problem|and|run|it)\b/gi, '').trim();
+            }
+            topic = topic || 'Algorithm';
+            const detectedLang = detectLanguageFromText(query) || 'cpp';
             const stepsToInsert = [
-              { id: normalized.length, type: 'type', field: 'code editor textarea', topic, label: `Write solution for ${topic}`, status: 'pending' }
+              { id: normalized.length, type: 'type', field: 'code editor textarea', topic, language: detectedLang, label: `Write ${detectedLang.toUpperCase()} code for ${topic}`, status: 'pending' }
             ];
             if (!hasProgRun) {
-              stepsToInsert.push({ id: normalized.length + 1, type: 'click', target: 'Run Compile Execute', label: 'Run and compile code', status: 'pending' });
+              stepsToInsert.push({ id: normalized.length + 1, type: 'click', target: 'Run Compile Execute', label: 'Run code', status: 'pending' });
             }
             normalized.splice(progIndex + 1, 0, ...stepsToInsert);
           }
@@ -2922,8 +2928,27 @@ async function runStepQueue(tabId) {
                 let didDispatch = false;
                 let cmView = null;
 
-                // Webpack 5 chunk hook for Programiz and similar platforms
-                if (window.webpackChunkprogramiz_oc) {
+                // 1. Direct DOM cmTile lookup (CodeMirror 6 internal DOM-to-View mapping)
+                let tile = cmContent.cmTile;
+                if (!tile) {
+                  const line = cmContent.querySelector('.cm-line');
+                  if (line) tile = line.cmTile;
+                }
+                if (!tile && cmContent.children) {
+                  for (const child of cmContent.children) {
+                    if (child.cmTile) { tile = child.cmTile; break; }
+                  }
+                }
+                if (!tile) {
+                  const cmRoot = document.querySelector('.cm-editor') || cmContent.closest('.cm-editor');
+                  if (cmRoot && cmRoot.cmTile) tile = cmRoot.cmTile;
+                }
+                if (tile) {
+                  cmView = tile.root?.view || tile.view;
+                }
+
+                // Webpack 5 chunk hook fallback for Programiz and similar platforms
+                if (!cmView && window.webpackChunkprogramiz_oc) {
                   try {
                     let req = null;
                     window.webpackChunkprogramiz_oc.push([
@@ -2931,26 +2956,21 @@ async function runStepQueue(tabId) {
                       {},
                       (r) => { req = r; }
                     ]);
-                    if (req) {
-                      try {
-                        const cmMod = req(6898);
-                        const ViewCls = cmMod?.Lz;
-                        if (ViewCls?.findFromDOM) {
-                          cmView = ViewCls.findFromDOM(document.getElementById('editor')) || ViewCls.findFromDOM(cmContent);
-                        }
-                      } catch(_) {}
-                      if (!cmView && req.c) {
-                        for (const id in req.c) {
-                          const exp = req.c[id]?.exports;
-                          if (!exp) continue;
-                          for (const val of Object.values(exp)) {
-                            if (val && typeof val.findFromDOM === 'function') {
-                              cmView = val.findFromDOM(document.getElementById('editor')) || val.findFromDOM(cmContent);
-                              if (cmView) break;
-                            }
-                          }
+                    if (req && req.c) {
+                      for (const id in req.c) {
+                        const exp = req.c[id]?.exports;
+                        if (!exp) continue;
+                        if (exp.Lz && typeof exp.Lz.findFromDOM === 'function') {
+                          cmView = exp.Lz.findFromDOM(document.getElementById('editor')) || exp.Lz.findFromDOM(cmContent);
                           if (cmView) break;
                         }
+                        for (const val of Object.values(exp)) {
+                          if (val && typeof val.findFromDOM === 'function') {
+                            cmView = val.findFromDOM(document.getElementById('editor')) || val.findFromDOM(cmContent);
+                            if (cmView) break;
+                          }
+                        }
+                        if (cmView) break;
                       }
                     }
                   } catch(_) {}
@@ -3104,18 +3124,20 @@ async function runStepQueue(tabId) {
       runStepQueue(targetTabId);
       return;
     } else {
-      console.warn('[SQ] Could not confirm editor injection, advancing queue to prevent hang...');
       step._retries = (step._retries || 0) + 1;
-      if (step._retries <= 2) {
+      if (step._retries <= 3) {
+        console.warn(`[SQ] Editor injection verification attempt failed, retrying (${step._retries}/3)...`);
+        broadcastStatus('thinking', `Confirming editor code injection (${step._retries}/3)...`);
         activeTask._isExecuting = false;
-        setTimeout(() => runStepQueue(targetTabId), 1000);
+        setTimeout(() => runStepQueue(targetTabId), 1200);
         return;
       }
-      // Safety net: mark done and advance queue so multi-step task never freezes
-      step.status = 'done';
+      console.error('[SQ] Code was not confirmed in editor after retries. Halting to avoid running default code.');
+      step.status = 'error';
       broadcastStepProgress();
+      broadcastStatus('error', `⚠️ Could not verify code in editor for ${topic}. Please check editor.`);
       activeTask._isExecuting = false;
-      runStepQueue(targetTabId);
+      activeTask.status = 'failed';
       return;
     }
   }
