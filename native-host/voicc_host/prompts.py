@@ -291,8 +291,9 @@ def build_agent_step_prompt(goal: str, page_url: str, page_title: str,
 
     hist_lines = []
     if history:
-        for i, h in enumerate(history[-6:]):
-            hist_lines.append(f"Turn {h.get('turn', i+1)}: Action={h.get('action')} on [{h.get('target')}] Success={h.get('success')} Thought={h.get('thought', '')[:80]}")
+        for i, h in enumerate(history[-12:]):  # Show last 12 turns so LLM has enough context to detect repetition
+            status = "✓" if h.get('success') else "✗"
+            hist_lines.append(f"Turn {h.get('turn', i+1)}: [{status}] Action={h.get('action')} on [{h.get('target')}] Thought={h.get('thought', '')[:80]}")
     history_str = "\n".join(hist_lines) if hist_lines else "None (first step)"
 
     prompt = (

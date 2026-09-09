@@ -67,6 +67,14 @@ class VisionPipeline:
         t_decode = time.perf_counter()
         metrics["decode_time_ms"] = round((t_decode - t1) * 1000, 2)
 
+        # 2b. PII Redaction (ISRO Compliance — FIX P3-B)
+        # Extract DOM text boxes from dom_data for precise bounding-box redaction.
+        # Falls back to conservative address-bar strip if no text boxes are available.
+        t_pii_start = time.perf_counter()
+        text_boxes = dom_data.get("text_boxes") or []
+        raw_image = self.preprocessor.redact_pii(raw_image, text_boxes if text_boxes else None)
+        metrics["pii_redact_time_ms"] = round((time.perf_counter() - t_pii_start) * 1000, 2)
+
         # 3. Foveated Sub-region Localization
         t2 = time.perf_counter()
         elements = dom_data.get("elements", [])

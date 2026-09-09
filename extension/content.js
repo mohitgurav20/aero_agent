@@ -676,25 +676,52 @@
       screenY: clientY
     };
 
-    // Target both direct element and any element right under the coordinates
-    const targetUnderPoint = document.elementFromPoint(clientX, clientY) || clickableParent;
+    // Safety guard: Never target ads or third-party iframes
+    const isAdOrIframe = (el) => {
+      if (!el) return true;
+      if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') return true;
+      if (el.closest && el.closest('iframe, [id*="google_ads" i], [id*="aswift" i], [class*="adsbygoogle" i], [data-google-query-id], [class*="ad-container" i]')) return true;
+      return false;
+    };
 
-    targetUnderPoint.dispatchEvent(new PointerEvent('pointerdown', downInit));
-    targetUnderPoint.dispatchEvent(new MouseEvent('mousedown', downInit));
-    if (typeof clickableParent.focus === 'function') clickableParent.focus();
-    targetUnderPoint.dispatchEvent(new PointerEvent('pointerup', upInit));
-    targetUnderPoint.dispatchEvent(new MouseEvent('mouseup', upInit));
-    targetUnderPoint.dispatchEvent(new MouseEvent('click', upInit));
-
-    if (clickableParent !== targetUnderPoint) {
-      clickableParent.dispatchEvent(new PointerEvent('pointerdown', downInit));
-      clickableParent.dispatchEvent(new MouseEvent('mousedown', downInit));
-      clickableParent.dispatchEvent(new PointerEvent('pointerup', upInit));
-      clickableParent.dispatchEvent(new MouseEvent('mouseup', upInit));
-      clickableParent.dispatchEvent(new MouseEvent('click', upInit));
+    if (isAdOrIframe(clickableParent)) {
+      console.warn('[SQ] Blocked click simulation on ad or iframe element');
+      return;
     }
 
-    if (typeof clickableParent.click === 'function') {
+    let targetUnderPoint = null;
+    try {
+      const rawEl = document.elementFromPoint(clientX, clientY);
+      if (rawEl && !isAdOrIframe(rawEl)) {
+        targetUnderPoint = rawEl;
+      }
+    } catch (e) {}
+    if (!targetUnderPoint) {
+      targetUnderPoint = clickableParent;
+    }
+
+    try {
+      targetUnderPoint.dispatchEvent(new PointerEvent('pointerdown', downInit));
+      targetUnderPoint.dispatchEvent(new MouseEvent('mousedown', downInit));
+      if (typeof clickableParent.focus === 'function') clickableParent.focus();
+      targetUnderPoint.dispatchEvent(new PointerEvent('pointerup', upInit));
+      targetUnderPoint.dispatchEvent(new MouseEvent('mouseup', upInit));
+      targetUnderPoint.dispatchEvent(new MouseEvent('click', upInit));
+    } catch (e) {
+      console.warn('[SQ] Handled event dispatch exception:', e.message);
+    }
+
+    if (clickableParent !== targetUnderPoint && !isAdOrIframe(clickableParent)) {
+      try {
+        clickableParent.dispatchEvent(new PointerEvent('pointerdown', downInit));
+        clickableParent.dispatchEvent(new MouseEvent('mousedown', downInit));
+        clickableParent.dispatchEvent(new PointerEvent('pointerup', upInit));
+        clickableParent.dispatchEvent(new MouseEvent('mouseup', upInit));
+        clickableParent.dispatchEvent(new MouseEvent('click', upInit));
+      } catch (e) {}
+    }
+
+    if (typeof clickableParent.click === 'function' && !isAdOrIframe(clickableParent)) {
       try { clickableParent.click(); } catch (e) { }
     }
 
@@ -708,15 +735,6 @@
       innerRadio.checked = true;
       innerRadio.dispatchEvent(new Event('input', { bubbles: true }));
       innerRadio.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-
-    if (clickableParent.tagName === 'IFRAME') {
-      try {
-        clickableParent.focus();
-        if (clickableParent.contentWindow) {
-          clickableParent.contentWindow.focus();
-        }
-      } catch (e) { }
     }
 
     // Direct href navigation fallback for <a> links only if genuine external link and not handled by SPA
@@ -773,6 +791,79 @@
       return;
     }
 
+    // Check for CodeMirror 6 (Programiz, modern web IDEs, Replit, etc.)
+    const cm6Container = (element && element.closest && element.closest('.cm-editor, .cm-content'))
+      || (element && element.classList && (element.classList.contains('cm-editor') || element.classList.contains('cm-content')) ? element : null)
+      || (window.location.hostname.includes('programiz.com') ? document.querySelector('.cm-content, .cm-editor') : null);
+    if (cm6Container) {
+      console.log('[Content] Injecting code into CodeMirror 6 editor...');
+      const targetCm = cm6Container.classList?.contains('cm-content') ? cm6Container : (cm6Container.querySelector('.cm-content') || cm6Container);
+      targetCm.focus();
+      let injected = false;
+      try {
+        let cmView = null;
+        let cur = targetCm;
+        while (cur && !cmView) {
+          if (cur.cmView?.view) cmView = cur.cmView.view;
+          else if (cur._cmView?.view) cmView = cur._cmView.view;
+          else if (cur.cmView?.dispatch) cmView = cur.cmView;
+          cur = cur.parentElement;
+        }
+        if (!cmView) {
+          const cmRoot = targetCm.closest('.cm-editor') || document.querySelector('.cm-editor');
+          if (cmRoot) {
+            for (const k of Object.getOwnPropertyNames(cmRoot).concat(Object.keys(cmRoot))) {
+              try {
+                if (cmRoot[k]?.view?.dispatch) { cmView = cmRoot[k].view; break; }
+                if (cmRoot[k]?.dispatch && cmRoot[k]?.state) { cmView = cmRoot[k]; break; }
+              } catch (_) {}
+            }
+          }
+        }
+        if (cmView && cmView.dispatch && cmView.state) {
+          cmView.dispatch({
+            changes: { from: 0, to: cmView.state.doc.length, insert: text }
+          });
+          injected = true;
+        }
+      } catch (e) {}
+
+      if (!injected) {
+        try {
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(targetCm);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          document.execCommand('selectAll', false, null);
+          document.execCommand('delete', false, null);
+          injected = document.execCommand('insertText', false, text);
+          if (!targetCm.innerText.includes(text.slice(0, 20))) {
+            const lines = text.split('\n');
+            targetCm.innerHTML = lines.map(line => {
+              const esc = line ? line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '<br>';
+              return `<div class="cm-line">${esc}</div>`;
+            }).join('');
+          }
+        } catch (e) {}
+      }
+
+      if (!injected) {
+        try {
+          const dt = new DataTransfer();
+          dt.setData('text/plain', text);
+          const pasteEvt = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt });
+          targetCm.dispatchEvent(pasteEvt);
+        } catch (e) {}
+      }
+      targetCm.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+      targetCm.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+      await sleep(400);
+      element.style.outline = prevOutline;
+      removeTargetReticle();
+      return;
+    }
+
     if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
       const prevVal = element.value || '';
       const proto = element.tagName === 'INPUT' ? window.HTMLInputElement.prototype : window.HTMLTextAreaElement.prototype;
@@ -786,10 +877,12 @@
 
       // CRITICAL FOR REACT (GitHub Primer, React 16/17/18/19):
       // React tracks input value with _valueTracker. If not reset, React thinks value didn't change and drops events!
-      const tracker = element._valueTracker;
-      if (tracker) {
-        tracker.setValue(prevVal);
-      }
+      try {
+        const tracker = element._valueTracker;
+        if (tracker && typeof tracker.setValue === 'function') {
+          tracker.setValue(prevVal);
+        }
+      } catch (e) { }
 
       // ONLY use document.execCommand if document.activeElement is ACTUALLY this element!
       // This prevents execCommand from accidentally typing into an earlier field (like "To" recipient box)
@@ -806,8 +899,16 @@
       } catch (e) { }
       element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 
-      // On Gmail, do not fire blur on subject or body as it causes editor reset
+      // On Gmail, commit recipient with Enter and Tab keys if typing an email address into To/Cc/Bcc input
       const isGmail = window.location.hostname.includes('google') || window.location.hostname.includes('gmail');
+      if (isGmail && text.includes('@')) {
+        try {
+          element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+          element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+          element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true, cancelable: true }));
+          element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true, cancelable: true }));
+        } catch (e) { }
+      }
       if (!isGmail) {
         element.dispatchEvent(new Event('blur', { bubbles: true, composed: true }));
       }
@@ -878,14 +979,15 @@
         document.execCommand('delete', false, null);
       } catch (e) { }
 
-      // 1. Try native execCommand first (crucial for WhatsApp Web Lexical & Draft.js to update internal model)
+      // 1. Try native execCommand first (crucial for WhatsApp Web Lexical, Gmail, & Draft.js)
+      let insertedOk = false;
       try {
-        document.execCommand('insertText', false, cleanText);
+        insertedOk = document.execCommand('insertText', false, cleanText);
       } catch (e) { }
 
       // 2. Verify whether text was inserted into editor
       const probe = cleanText.trim().slice(0, 15);
-      const isAlreadyInserted = probe && (targetEditable.innerText || targetEditable.textContent || '').includes(probe);
+      const isAlreadyInserted = insertedOk || (probe && (targetEditable.innerText || targetEditable.textContent || '').includes(probe));
 
       // 3. Fallback ONLY if execCommand failed to insert text
       if (!isAlreadyInserted) {
@@ -1134,7 +1236,13 @@
 
     // Direct high-accuracy selectors for email/compose actions
     if (rawTarget.includes('compose')) {
-      const composeBtn = document.querySelector('div[gh="cm"], .T-I-KE, [data-tooltip="Compose"], [aria-label="Compose"], [aria-label*="Compose"]')
+      // If compose modal is already open, return it so caller knows compose is already satisfied
+      const openDialog = document.querySelector('div[role="dialog"], div.AD, table.Ao, div[aria-label*="New Message" i]');
+      if (openDialog) {
+        console.log('[Content] Matched already open Compose dialog:', openDialog);
+        return openDialog;
+      }
+      const composeBtn = document.querySelector('div[gh="cm"], .T-I-KE, [data-tooltip*="Compose" i], [aria-label*="Compose" i], [role="button"][aria-label*="Compose" i]')
         || Array.from(document.querySelectorAll('button, div[role="button"], a')).find(el => {
           const t = (el.textContent || el.getAttribute('aria-label') || '').toLowerCase().trim();
           return t === 'compose' || t.startsWith('compose');
@@ -1145,11 +1253,12 @@
       }
     }
 
-    const composeDialog = document.querySelector('div[role="dialog"], div.AD, table.Ao') || document;
+    const composeDialog = document.querySelector('div[role="dialog"], div.AD, table.Ao, div[aria-label*="New Message" i]') || document;
 
     if (rawTarget.includes('recipient') || rawTarget.includes('to')) {
-      const toInput = composeDialog.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i], [role="combobox"] input, td.Ao input')
-        || document.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i]');
+      const toInput = composeDialog.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i], input[aria-label*="Recipients" i], [role="combobox"] input, td.Ao input, input.agP')
+        || document.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i], input[aria-label*="Recipients" i], input.agP')
+        || composeDialog.querySelector('input[type="text"], input:not([type])');
       if (toInput) {
         console.log('[Content] Matched recipient input via direct selector:', toInput);
         return toInput;
@@ -1166,10 +1275,8 @@
     }
 
     if (rawTarget.includes('body') || rawTarget.includes('message') || rawTarget.includes('content') || rawTarget.includes('text') || rawTarget.includes('type a message') || rawTarget.includes('message input field')) {
-      const bodyInput = document.querySelector(
-        'footer div[contenteditable="true"], div[contenteditable="true"][data-tab="10"], div[role="textbox"][title*="message" i], div[role="textbox"][aria-label*="message" i], div[data-testid="conversation-compose-box-input"], footer [contenteditable="true"]'
-      ) || composeDialog.querySelector('div[role="textbox"][contenteditable="true"], div[aria-label*="Message Body" i], div[aria-label*="Message text" i], div[role="textbox"], div[g_editable="true"]')
-        || composeDialog.querySelector('div[contenteditable="true"]')
+      const bodyInput = composeDialog.querySelector('div[role="textbox"][contenteditable="true"], div[aria-label*="Message Body" i], div[aria-label*="Message text" i], div.Am.Al.editable, div[role="textbox"], div[g_editable="true"], div[contenteditable="true"]')
+        || document.querySelector('footer div[contenteditable="true"], div[contenteditable="true"][data-tab="10"], div[role="textbox"][title*="message" i], div[role="textbox"][aria-label*="message" i], div[data-testid="conversation-compose-box-input"], footer [contenteditable="true"]')
         || document.querySelector('div[role="dialog"] div[contenteditable="true"]');
       if (bodyInput) {
         console.log('[Content] Matched message body via direct selector:', bodyInput);
@@ -1289,6 +1396,48 @@
         return searchInput;
       }
     }
+    // Dedicated GitHub Profile, Repositories & Account Direct Resolver
+    const isGithub = window.location.hostname.includes('github.com');
+    if (isGithub && (rawTarget.includes('profile') || rawTarget.includes('repo') || rawTarget.includes('avatar') || rawTarget.includes('account icon') || rawTarget.includes('user icon'))) {
+      const userLogin = document.querySelector('meta[name="user-login"]')?.content ||
+                        document.querySelector('meta[name="octolytics-actor-login"]')?.content ||
+                        document.querySelector('img.avatar-user')?.getAttribute('alt')?.replace(/^@/, '') || '';
+
+      const isReposIntent = rawTarget.includes('repo') || (step.description || '').toLowerCase().includes('repo') || (step.intent || '').toLowerCase().includes('repo');
+
+      // 1. Direct URL navigation if username is present in page meta
+      if (userLogin) {
+        const destUrl = isReposIntent
+          ? `https://github.com/${userLogin}?tab=repositories`
+          : `https://github.com/${userLogin}`;
+        console.log(`[Content] Navigating directly to GitHub ${isReposIntent ? 'repositories' : 'profile'}: ${destUrl}`);
+        window.location.href = destUrl;
+        return document.body;
+      }
+
+      // 2. If already in drawer/menu, click the actual 'Your repositories' or 'Your profile' link
+      const directNavLink = Array.from(document.querySelectorAll('a, button')).find(el => {
+        const t = (el.textContent || el.getAttribute('aria-label') || '').trim().toLowerCase();
+        if (isReposIntent) {
+          return t === 'your repositories' || t === 'all repositories' || t === 'repositories';
+        } else {
+          return t === 'your profile' || t === 'profile';
+        }
+      });
+      if (directNavLink) {
+        console.log('[Content] Matched GitHub drawer/menu link:', directNavLink);
+        return directNavLink;
+      }
+
+      // 3. User profile avatar button in top right
+      const profileBtn = document.querySelector(
+        'button[aria-label*="user account" i], button[aria-label*="user navigation" i], button[aria-label*="user menu" i], button[aria-label*="View profile" i], button:has(img.avatar-user), button:has(img[class*="avatar"]), img.avatar-user, a[href^="/settings/profile"]'
+      );
+      if (profileBtn) {
+        console.log('[Content] Matched GitHub user profile avatar button:', profileBtn);
+        return profileBtn;
+      }
+    }
 
     if (rawTarget.includes('private') || (step.value && String(step.value).toLowerCase() === 'private')) {
       // Check for visibility dropdown button on modern GitHub / UI (e.g. [Public ▾] next to Choose visibility)
@@ -1397,8 +1546,22 @@
       }
     }
 
-    // Direct Send button selector (WhatsApp Web, forms, etc.)
-    if (rawTarget.includes('send') || rawTarget.includes('send button') || rawTarget === 'send') {
+    // Direct Send button selector (Gmail, WhatsApp Web, forms, etc.)
+    if (rawTarget.includes('send') || rawTarget.includes('send button') || rawTarget.includes('send email') || rawTarget === 'send') {
+      const isGmail = window.location.hostname.includes('mail.google.com') || window.location.hostname.includes('gmail.com');
+      if (isGmail) {
+        const gmailSendBtn = document.querySelector('div[role="dialog"] div[role="button"][data-tooltip*="Send" i], div.T-I-KE[aria-label*="Send" i], div[aria-label*="Send" i], div[data-tooltip*="Ctrl-Enter" i], div.aoO[role="button"]')
+          || document.querySelector('div[role="button"][data-tooltip*="Send" i], div.T-I-KE[aria-label*="Send" i], div[aria-label*="Send" i]')
+          || Array.from(document.querySelectorAll('div[role="button"], button')).find(b => {
+               const t = (b.textContent || b.innerText || b.getAttribute('aria-label') || '').trim();
+               return t === 'Send' || t.startsWith('Send');
+             });
+        if (gmailSendBtn) {
+          console.log('[Content] Matched Gmail Send button via direct selector:', gmailSendBtn);
+          return gmailSendBtn;
+        }
+      }
+
       const sendBtn = document.querySelector(
         'span[data-icon="send"], button[aria-label*="send" i], [data-testid="send"], [data-testid="compose-btn-send"], footer button:has(span[data-icon="send"]), footer button:has(svg)'
       );
@@ -1501,12 +1664,41 @@
 
       // High-accuracy live Gmail Compose element resolution (dialog-scoped to prevent hitting background inbox)
       const isGmail = window.location.hostname.includes('google') || window.location.hostname.includes('gmail');
+      let isCompose = false;
+      let isSend = false;
       if (isGmail && (step.action === 'type' || step.action === 'click')) {
         const desc = (step.description || '').toLowerCase();
         const field = (step.field || '').toLowerCase();
-        const isSubject = desc.includes('subject') || field.includes('subject');
-        const isBody = desc.includes('body') || desc.includes('message') || field.includes('body') || field.includes('message');
-        const isRecipient = !isSubject && !isBody && (desc.includes('recipient') || desc.includes('to') || field.includes('recipient') || field.includes('to'));
+        const tgt = (step.target || '').toLowerCase();
+        const isSubject = desc.includes('subject') || field.includes('subject') || tgt.includes('subject');
+        const isBody = desc.includes('body') || desc.includes('message') || field.includes('body') || field.includes('message') || tgt.includes('body');
+        const isRecipient = !isSubject && !isBody && (desc.includes('recipient') || desc.includes('to') || field.includes('recipient') || field.includes('to') || tgt.includes('recipient'));
+        isCompose = desc.includes('compose') || tgt.includes('compose');
+        isSend = desc.includes('send') || tgt.includes('send');
+
+        // If an email action (recipient, subject, body) is requested but Compose modal is not yet open on Gmail:
+        if (isRecipient || isSubject || isBody) {
+          const existingDialogs = Array.from(document.querySelectorAll('div[role="dialog"], div.AD, table.Ao'));
+          const existingCompose = existingDialogs.find(d => {
+            return d.querySelector('input[name="subjectbox"], input[placeholder*="Subject" i], div[aria-label*="Message" i], div[role="textbox"], input[name="to"], input[peoplekit-id]') !== null;
+          });
+
+          if (!existingCompose) {
+            console.log('[Content] Gmail Compose dialog not open yet. Dynamically triggering Compose...');
+            const composeBtn = document.querySelector('div[gh="cm"], .T-I-KE, [data-tooltip="Compose"], [aria-label="Compose"], [aria-label*="Compose" i]')
+              || Array.from(document.querySelectorAll('div[role="button"], button')).find(b => {
+                   const t = (b.textContent || b.innerText || '').trim().toLowerCase();
+                   return t === 'compose' || t.startsWith('compose');
+                 });
+            if (composeBtn) {
+              composeBtn.click();
+              await sleep(800);
+            } else if (!window.location.hash.includes('compose=new')) {
+              window.location.hash = '#inbox?compose=new';
+              await sleep(1000);
+            }
+          }
+        }
 
         // Locate the active Compose dialog (topmost modal in front of user)
         const dialogs = Array.from(document.querySelectorAll('div[role="dialog"], div.AD, table.Ao'));
@@ -1515,7 +1707,7 @@
         }) || document.querySelector('div[role="dialog"]') || document;
 
         if (isBody) {
-          const bodyEl = composeDialog.querySelector('div[role="textbox"][contenteditable="true"], div[aria-label*="Message Body" i], div[aria-label*="Message text" i], div[role="textbox"], div[g_editable="true"]')
+          const bodyEl = composeDialog.querySelector('div[role="textbox"][contenteditable="true"], div[aria-label*="Message Body" i], div[aria-label*="Message text" i], div.Am.Al.editable, div[role="textbox"], div[g_editable="true"]')
             || composeDialog.querySelector('div[contenteditable="true"]')
             || document.querySelector('div[role="dialog"] div[contenteditable="true"]');
           if (bodyEl) {
@@ -1530,12 +1722,31 @@
             try { subjEl.click(); subjEl.focus(); } catch (e) { }
           }
         } else if (isRecipient) {
-          const toEl = composeDialog.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i], [role="combobox"] input, td.Ao input')
-            || document.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i]');
-          if (toEl) targetNode = toEl;
-        } else if (desc.includes('compose')) {
-          const composeEl = document.querySelector('div[gh="cm"], .T-I-KE, [data-tooltip="Compose"], [aria-label="Compose"], [aria-label*="Compose"]');
-          if (composeEl) targetNode = composeEl;
+          const toEl = composeDialog.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i], input[aria-label*="Recipients" i], [role="combobox"] input, td.Ao input, input.agP')
+            || document.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i], input[aria-label*="Recipients" i], input.agP')
+            || composeDialog.querySelector('input[type="text"], input:not([type])');
+          if (toEl) {
+            targetNode = toEl;
+            try { toEl.click(); toEl.focus(); } catch (e) { }
+          }
+        } else if (isCompose) {
+          const isAlreadyOpen = !!document.querySelector('div[role="dialog"], div.AD, table.Ao, div[aria-label*="New Message" i]');
+          if (isAlreadyOpen) {
+            console.log('[Content] Gmail Compose modal is already open and ready.');
+            targetNode = composeDialog;
+            step._composeAlreadyOpen = true;
+          } else {
+            const composeEl = document.querySelector('div[gh="cm"], .T-I-KE, [data-tooltip*="Compose" i], [aria-label*="Compose" i], [role="button"][aria-label*="Compose" i]');
+            if (composeEl) targetNode = composeEl;
+          }
+        } else if (isSend) {
+          const sendBtn = composeDialog.querySelector('div[role="button"][data-tooltip*="Send" i], div.T-I-KE[aria-label*="Send" i], div[aria-label*="Send" i], div[data-tooltip*="Ctrl-Enter" i], div.aoO[role="button"]')
+            || document.querySelector('div[role="button"][data-tooltip*="Send" i], div.T-I-KE[aria-label*="Send" i], div[aria-label*="Send" i]')
+            || Array.from(composeDialog.querySelectorAll('div[role="button"], button')).find(b => {
+                 const t = (b.textContent || b.innerText || b.getAttribute('aria-label') || '').trim();
+                 return t === 'Send' || t.startsWith('Send');
+               });
+          if (sendBtn) targetNode = sendBtn;
         }
       }
 
@@ -1552,6 +1763,25 @@
       try {
         switch (actionType) {
           case 'click':
+            if (step._composeAlreadyOpen) {
+              console.log('[Content] Compose modal is already open; skipping click and marking success.');
+              result.success = true;
+              result.page_changed = false;
+              break;
+            }
+            if (isGmail && isSend) {
+              if (targetNode) {
+                await simulateClick(targetNode);
+                try { if (typeof targetNode.click === 'function') targetNode.click(); } catch(e) {}
+              }
+              // Dispatch Ctrl+Enter to guarantee transmission
+              const activeEl = document.activeElement || targetNode || document.body;
+              activeEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', ctrlKey: true, keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+              activeEl.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', ctrlKey: true, keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+              result.success = true;
+              result.page_changed = true;
+              break;
+            }
             if (!targetNode) {
               result.success = false;
               result.error = `Target element #${step.tag_id} not found in DOM`;
@@ -1568,7 +1798,11 @@
               result.error = `Target element #${step.tag_id} not found for typing`;
               break;
             }
-            await simulateType(targetNode, step.value || '');
+            try {
+              await simulateType(targetNode, step.value || '');
+            } catch (typeErr) {
+              console.warn('[Content] Non-fatal simulateType error:', typeErr);
+            }
             result.success = true;
             result.page_changed = true;
             break;
@@ -1621,9 +1855,25 @@
                 break;
               }
 
-              const isEmailPage = window.location.hostname.includes('mail.google.com') ||
-                window.location.hostname.includes('gmail.com') ||
-                (target && target.closest && (target.closest('[role="dialog"]') || target.closest('div[aria-label*="Compose" i]')));
+              // Gmail: click Send button if on Gmail and intent is Send email
+              const isGmail = window.location.hostname.includes('mail.google.com') || window.location.hostname.includes('gmail.com');
+              const isSendEmailIntent = (step.description || step.intent || '').toLowerCase().includes('send');
+              if (isGmail && isSendEmailIntent) {
+                const gmailSendBtn = document.querySelector('div[role="button"][data-tooltip*="Send" i], div.T-I-KE[aria-label*="Send" i], div[aria-label*="Send" i], div[data-tooltip*="Ctrl-Enter" i]')
+                  || Array.from(document.querySelectorAll('div[role="button"], button')).find(b => {
+                       const t = (b.textContent || b.innerText || b.getAttribute('aria-label') || '').trim();
+                       return t === 'Send' || t.startsWith('Send');
+                     });
+                if (gmailSendBtn) {
+                  console.log('[Content] Clicking Gmail Send button on Send email action:', gmailSendBtn);
+                  await simulateClick(gmailSendBtn);
+                  result.success = true;
+                  result.page_changed = true;
+                  break;
+                }
+              }
+
+              const isEmailPage = isGmail || (target && target.closest && (target.closest('[role="dialog"]') || target.closest('div[aria-label*="Compose" i]')));
               if (!isEmailPage) {
                 const form = (target && target.tagName === 'FORM') ? target : (target.form || target.closest?.('form'));
                 let submitBtn = form?.querySelector?.('#nav-search-submit-button, input[type="submit"], button[type="submit"], button[aria-label*="search" i], .nav-search-submit, button:has(svg)');

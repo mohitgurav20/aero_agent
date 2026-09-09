@@ -1,6 +1,56 @@
 # SIH26171 Autonomous Vision Agent — Verification & Upgrades Walkthrough
 
-## Summary of Completed Work
+## Latest Update: DOM Powers, Editor State Perception & Autonomous Self-Healing
+
+### Root Cause Analysis of the LeetCode "Compile Error" & Hallucinated Plan
+1. **Adversarial Pivot Negation Loss (`...instead solve leetcode`)**:
+   - The user prompted `...nd classes instead solve leetcode`.
+   - The planner did not recognize the keyword `"instead"` as an explicit instruction to abort the previous intent (classes/email) and isolate the new intent.
+   - Consequently, the LLM concatenated 13 steps containing leftover email steps (`Type recipient email`), LeetCode steps, and Programiz steps.
+2. **Cross-Domain Step Contamination**:
+   - Step 2 (`Type recipient email`) executed on `leetcode.com` and falsely completed because there was no domain check stopping email actions on coding platforms.
+3. **Step Inversion & Empty Editor Blindness**:
+   - The planner scheduled `Run code` as Step 3, while `Write solution for Sort Colors` was placed after it as Step 6.
+   - When the agent executed Step 3 (`Run code`), it did **not check the editor content** via DOM/Monaco API.
+   - It clicked Run on an empty editor, causing LeetCode to throw:
+     `Compile Error: Line 8: Char 7: error: use of undeclared identifier 'Solution'`.
+4. **Perception Blindness & Toast Hallucination**:
+   - When LeetCode ran the code, it showed a big red `Compile Error` in the Test Result panel.
+   - But because LeetCode simultaneously rendered a transient toast `Run code completed` in the navbar, the agent's runner blindly marked Step 3 as `DONE` and announced `✓ Run code completed`, ignoring the red error on screen!
+
+---
+
+### Upgrades Implemented
+
+1. **Pivot & Adversarial Negation Extraction (`server/app.py` & `extension/background.js`)**:
+   - Regex matches `(?:^|\b)(?:instead\s+of\s+[^,;]+[,;]?\s*|instead\s+)(.+)$` in both the server and extension planner.
+   - When the user pivots with `"instead"`, the agent cleanly isolates the intended action and discards previous tasks.
+
+2. **Cross-Domain Contamination Guards (Planner & Runtime)**:
+   - **In Planner**: If a plan targets coding platforms (`leetcode.com`, `programiz.com`), all stray email steps (`recipient`, `to`, `subject`, `Send email`) are automatically pruned.
+   - **Strict Step Ordering**: Enforces that `Write solution for <Problem>` **ALWAYS precedes** `Run code` and `Submit code`. If placed out of order or missing, it is automatically reordered/synthesized before `Run code`.
+   - **In Runtime Queue**: If the active tab is a coding platform and a pending step is an email action, the agent automatically drops the step with a log warning and advances.
+
+3. **Pre-Run Editor Content Verification (DOM Powers)**:
+   - In `isRunStep` ([`extension/background.js`](file:///c:/Users/Asus/Desktop/secondroundSIH/extension/background.js)), before clicking Run:
+   - The agent inspects the live Monaco editor (LeetCode) or CodeMirror 6 (Programiz) in the page's MAIN world.
+   - If the editor is blank, under 30 characters, or lacks the required solution class/function, the agent **pauses execution**, calls `/api/generate_code`, and **injects the solution FIRST** before clicking Run.
+
+4. **Post-Run DOM Test Result Perception & Autonomous Self-Healing**:
+   - Instead of a blind sleep, `isRunStep` polls the DOM Test Result panel for up to 15 seconds:
+     - Detects `Compile Error` (`[class*="compile-error"], [data-e2e-locator="console-result"]`).
+     - Detects `Runtime Error`.
+     - Detects `Wrong Answer`.
+     - Detects `Accepted` / `Finished`.
+   - If `Compile Error` or `Runtime Error` is detected:
+     - The agent extracts the compiler error snippet.
+     - Announces verbally and in status: `⚠️ Compile Error detected in Test Result. Self-healing with local LLM...`.
+     - Calls the local LLM (`/api/generate_code`) with the exact compiler error and existing code to generate a fix.
+     - Injects the healed code into Monaco and re-clicks Run (up to 2 iterations).
+     - If still failing, it accurately flags `step.status = 'error'` and displays the compiler error instead of hallucinating success.
+   - Only when testcases pass without compilation error does it mark `step.status = 'done'`.
+
+---
 
 All issues reported from yesterday and in your screenshot on `x.com` have been addressed, verified, and bundled across both the Chrome Extension and the Python Local AI Gateway:
 

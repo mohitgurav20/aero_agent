@@ -571,107 +571,119 @@ def generate_code():
         topic = clean_topic
 
     language = str(data.get("language") or "python").strip().lower()
-    is_leetcode = bool(data.get("is_leetcode")) or "leetcode" in str(data.get("site") or "").lower() or "leetcode" in topic.lower()
+    site_str = str(data.get("site") or "").lower()
+    is_programiz = "programiz" in site_str or "programiz" in topic.lower()
+    is_leetcode = (bool(data.get("is_leetcode")) or "leetcode" in site_str or "leetcode" in topic.lower()) and not is_programiz
     if is_leetcode and (language == "plaintext" or not language):
         language = "cpp"
     template = str(data.get("template") or "").strip()
     problem_description = str(data.get("problem_description") or data.get("description") or "").strip()
 
     error_feedback = str(data.get("error_feedback") or "").strip()
+    current_code = str(data.get("current_code") or "").strip()
+    healing_attempt = int(data.get("attempt") or 1)
 
     if not topic:
         topic = "algorithm"
 
-    if is_leetcode or template:
+    if is_leetcode:
         prompt = (
-            f"You are a Grandmaster Competitive Programmer and Algorithms Specialist (Red rating).\n"
+            f"You are a World-Class Competitive Programmer and Algorithms Specialist.\n"
             f"Task: Solve the LeetCode problem '{topic}' with 100% correctness and optimal time/space complexity.\n"
             f"Language: {language}.\n\n"
         )
         if problem_description:
             prompt += (
                 f"OFFICIAL LEETCODE PROBLEM SPECIFICATION & EXAMPLES:\n"
-                f"{problem_description[:3000]}\n\n"
+                f"{problem_description[:3500]}\n\n"
             )
-        if template:
+        # FIX P3-B: On healing attempts >= 2 with existing code or error feedback,
+        # omit the empty template to avoid confusing the LLM into generating from scratch
+        if template and (healing_attempt < 2 or not (error_feedback or current_code)):
             prompt += (
                 f"OFFICIAL LEETCODE SOLUTION TEMPLATE:\n{template}\n\n"
                 f"CRITICAL REQUIREMENT:\n"
-                f"Adhere strictly to the exact class and method signatures given in the template above. "
+                f"Adhere strictly to the class and method signatures given in the template above. "
                 f"Do not rename the method or change the parameter/return types.\n\n"
             )
 
         if "cpp" in language or "c++" in language:
             prompt += (
-                "C++ COMPETITIVE PROGRAMMING RULES:\n"
-                "- Write standard C++17 code enclosed in 'class Solution'.\n"
+                "C++ IMPLEMENTATION RULES:\n"
+                "- Write standard C++17 enclosed in 'class Solution'.\n"
                 "- Place solution methods under 'public:'.\n"
-                "- NEVER write nested functions inside another function (nested functions are illegal in standard C++). Place all helper functions as private or public member functions of class Solution.\n"
-                "- Include standard STL headers (#include <vector>, <string>, <unordered_map>, <unordered_set>, <queue>, <stack>, <algorithm>, <climits>, <iostream>) and 'using namespace std;'.\n"
-                "- Do NOT use Java syntax (.length, boolean, null). Use .size(), bool, nullptr, true/false, vector<vector<...>>&.\n\n"
+                "- Helper functions should be private or public member functions of class Solution (never declare nested functions inside a method).\n"
+                "- Include standard STL headers (#include <vector>, <string>, <unordered_map>, <unordered_set>, <queue>, <stack>, <algorithm>, <climits>, <iostream>, <cmath>, <numeric>) and 'using namespace std;'.\n"
+                "- Use .size(), bool, nullptr, true/false, vector<vector<...>>&.\n"
+                "- Prevent integer overflow by using 'long long' for intermediate sums, products, or factorials when values can exceed 2^31 - 1.\n\n"
             )
         elif "python" in language:
             prompt += (
-                "PYTHON RULES:\n"
+                "PYTHON IMPLEMENTATION RULES:\n"
                 "- Write standard Python 3 code enclosed in 'class Solution:'.\n"
-                "- Use standard library modules if needed (collections, heapq, bisect, math).\n\n"
+                "- Use standard library modules (collections, heapq, bisect, math) if needed.\n\n"
             )
 
-        prompt += (
-            f"ALGORITHM CORRECTNESS & REASONING RULES FOR '{topic.upper()}':\n"
-            "1. Deeply analyze the problem logic, constraints, and time/space complexity:\n"
-            "   - BACKTRACKING (e.g. N-Queens, Sudoku, Subsets, Permutations, Combination Sum, Word Search):\n"
-            "     * When returning all configurations (e.g. vector<vector<string>>, vector<vector<int>>): NEVER halt recursion early! Explore all branches.\n"
-            "     * The recursive helper function MUST be 'void' (NOT 'bool'). Do NOT return bool after finding one solution!\n"
-            "     * For N-Queens:\n"
-            "       Use 'vector<string> board(n, string(n, \x27.\x27));' and 'vector<vector<string>> ans;'.\n"
-            "       Helper 'bool isSafe(int row, int col, const vector<string>& board, int n)':\n"
-            "         for (int i = 0; i < row; ++i) if (board[i][col] == \x27Q\x27) return false;\n"
-            "         for (int i = row - 1, j = col - 1; i >= 0 && j >= 0; --i, --j) if (board[i][j] == \x27Q\x27) return false;\n"
-            "         for (int i = row - 1, j = col + 1; i >= 0 && j < n; --i, ++j) if (board[i][j] == \x27Q\x27) return false;\n"
-            "         return true;\n"
-            "       Helper 'void backtrack(int row, int n, vector<string>& board, vector<vector<string>>& ans)':\n"
-            "         if (row == n) { ans.push_back(board); return; }\n"
-            "         for (int col = 0; col < n; ++col) {\n"
-            "           if (isSafe(row, col, board, n)) {\n"
-            "             board[row][col] = \x27Q\x27;\n"
-            "             backtrack(row + 1, n, board, ans);\n"
-            "             board[row][col] = \x27.\x27;\n"
-            "           }\n"
-            "         }\n"
-            "   - DYNAMIC PROGRAMMING: Formulate exact state transitions, base cases, and memoization/tabulation without off-by-one errors.\n"
-            "   - GRAPHS: Cycle detection, BFS/DFS, Topological sort (Kahn's in-degree queue algorithm), Dijkstra or Union-Find.\n"
-            "   - BINARY SEARCH: low <= high, mid = low + (high - low) / 2 with correct branch updates.\n"
-            "   - TWO POINTERS / SLIDING WINDOW: Maintain window invariants and update answers.\n"
-            "2. Handle all edge cases cleanly (n=1, empty inputs, single element, boundary constraints).\n"
-            "3. Ensure the solution runs well within standard LeetCode time limits (sub-50ms) and passes all testcases.\n\n"
-        )
-
-        if error_feedback:
+        if error_feedback or current_code:
             prompt += (
-                f"CRITICAL FIX: PREVIOUS SUBMISSION FAILED ON LEETCODE!\n"
-                f"Failure Details:\n{error_feedback}\n\n"
-                f"ROOT-CAUSE INSTRUCTIONS:\n"
-                f"1. If Wrong Answer: Carefully compare your output against Expected for the failed Input.\n"
-                f"   - If your output had fewer solutions than Expected (like returning 1 solution instead of all), you stopped recursion early or didn't backtrack properly! Helper must be void and continue searching.\n"
-                f"   - If you had duplicate solutions or incorrect values, fix your state transitions, visited sets, or bounds.\n"
-                f"2. If Compile or Runtime Error: Fix the exact syntax error, missing headers, or out-of-bounds index.\n"
-                f"3. Return the complete, corrected, fully working class Solution.\n\n"
+                f"===============================================================\n"
+                f"CRITICAL BUG-FIX & SELF-HEALING (REVISION ATTEMPT #{healing_attempt})\n"
+                f"===============================================================\n"
+            )
+            if current_code:
+                prompt += (
+                    f"PREVIOUS CODE (FAILED ON LEETCODE):\n"
+                    f"```{language}\n{current_code}\n```\n\n"
+                )
+            if error_feedback:
+                prompt += (
+                    f"LEETCODE FAILURE DETAILS:\n{error_feedback}\n\n"
+                )
+            prompt += (
+                "AUTONOMOUS REASONING & DEBUGGING INSTRUCTIONS:\n"
+                "1. Mentally trace your previous code on the failed testcase:\n"
+                "   - Where did the logic fail or output deviate from the Expected result?\n"
+                "   - Check for off-by-one errors, unhandled boundary values (0, 1, negatives), or unvisited states.\n"
+                "2. Try Different Algorithmic Perspectives:\n"
+                "   - If your previous approach was too complex, brittle, or slow (TLE), discard the flawed approach and implement a more direct, robust algorithm (e.g. State Machine, DP table, Hash Map counting, Two Pointers, Monotonic Stack, or Mathematical formulation).\n"
+                "   - If backtracking: ensure helper functions explore all valid paths without prematurely returning or halting search, and restore state properly.\n"
+                "3. Ensure the revised solution handles all testcases and edge conditions.\n"
+                "4. Return ONLY the complete, corrected class Solution implementation.\n\n"
+            )
+        else:
+            prompt += (
+                "ALGORITHMIC REASONING GUIDELINES:\n"
+                "1. Analyze the problem type, input constraints, and edge cases (empty input, single element, boundary limits).\n"
+                "2. Choose the optimal algorithm that satisfies time and memory limits:\n"
+                "   - For searching/state exploration: clean recursion with backtracking, BFS/DFS, or state tracking.\n"
+                "   - For sequence/array optimization: two pointers, sliding window, prefix sums, or binary search.\n"
+                "   - For combinatorics or math: factoradic indexing, modular arithmetic, or precomputed values.\n"
+                "   - For string validation: clear state tracking flags or transition logic.\n"
+                "3. Output clean, readable, bug-free code strictly matching the template.\n\n"
             )
 
         prompt += (
             "OUTPUT FORMAT:\n"
             "Return ONLY the complete, compilable class Solution implementation.\n"
-            "Do NOT include markdown backticks (no ```), do not include conversational commentary, and do not include main() driver code."
+            "Do NOT include conversational commentary or explanation. Return the code directly."
         )
     else:
         prompt = (
-            f"You are an expert {language} developer. Write clean, working, runnable {language} code for: '{topic}'.\n"
+            f"You are an expert {language} developer. Write clean, working, standalone, fully runnable {language} code for: '{topic}'.\n"
             "Requirements:\n"
             "1. Return ONLY pure runnable executable code.\n"
             "2. Do NOT wrap in markdown backticks (no ```), do not include any conversational greeting or explanations.\n"
-            "3. Provide direct demonstration calls with print statements showing results (e.g. print(add(10, 5))), rather than blocking interactive input() calls, so it executes and displays results immediately.\n"
+            "3. For compiled languages (C, C++, Java):\n"
+            "   - You MUST include a standard runnable main function (e.g. 'int main() { ... return 0; }' in C/C++, or 'public class Main { public static void main(String[] args) { ... } }' in Java).\n"
+            "   - Include necessary standard headers (#include <stdio.h>, <string.h>, <stdbool.h> for C; #include <iostream>, <vector>, <string>, <algorithm> for C++).\n"
+            "   - Inside main(), call your solution with test inputs and print the output so that when executed on an online compiler, it produces clear terminal output!\n"
+            "4. For Python:\n"
+            "   - Provide direct demonstration calls with print statements showing results.\n"
+            "   - Do NOT use interactive input() calls that block execution.\n"
         )
+
+    # Dynamic temperature: low on attempt 1 for precision, slightly elevated on retries to explore diverse approaches
+    temperature = 0.15 if healing_attempt <= 1 else min(0.45, 0.2 + 0.08 * (healing_attempt - 1))
 
     code = ""
     for role in ("text", "draft"):
@@ -679,7 +691,7 @@ def generate_code():
             resp = ollama_client.generate(
                 role=role,
                 prompt=prompt,
-                options={"temperature": 0.2, "top_p": 0.9}
+                options={"temperature": temperature, "top_p": 0.9}
             )
             raw = resp.text.strip()
             import re
@@ -701,7 +713,7 @@ def generate_code():
         return jsonify({"status": "error", "message": f"Failed to synthesize valid code for {topic}"}), 500
 
     # LeetCode format guarantee: remove main() driver and ensure class Solution wrapping
-    if is_leetcode or template or "leetcode" in topic.lower():
+    if is_leetcode or "leetcode" in topic.lower():
         code = re.sub(r"int\s+main\s*\([^)]*\)\s*\{[\s\S]*\}", "", code).strip()
 
         if "cpp" in language or "c++" in language:
@@ -717,16 +729,6 @@ def generate_code():
             code = re.sub(r"\bboolean\b", "bool", code)
             code = re.sub(r"(\bunordered_set<[^>]+>\s+\w+)\s*\([^;)]+\)\s*;", r"\1;", code)
             code = re.sub(r"(\bunordered_map<[^>]+>\s+\w+)\s*\([^;)]+\)\s*;", r"\1;", code)
-
-            # Ensure conflict checks in isSafe return false, never return void
-            code = re.sub(r'(\bif\s*\([^)]*==\s*[\x27\x22]Q[\x27\x22][^)]*\)\s*\{?\s*)return\s*;', r'\1return false;', code)
-
-            # Fix common LLM axis confusion in N-Queens where isSafe checks board[row][i] instead of column board[i][col]
-            code = re.sub(r'for\s*\(\s*int\s+i\s*=\s*0\s*;\s*i\s*<\s*(?:col|n)\s*;\s*\+*i\+*\s*\)\s*\{?\s*if\s*\(\s*board\[row\]\[i\]\s*==\s*[\x27"]Q[\x27"]\s*\)\s*return\s+false\s*;?\s*\}?',
-                          'for (int i = 0; i < row; ++i) { if (board[i][col] == \'Q\') return false; }', code)
-            code = re.sub(r'for\s*\(\s*int\s+i\s*=\s*0\s*;\s*i\s*<\s*(?:col|n)\s*;\s*\+*i\+*\s*\)\s*if\s*\(\s*board\[row\]\[i\]\s*==\s*[\x27"]Q[\x27"]\s*\)\s*return\s+false\s*;',
-                          'for (int i = 0; i < row; ++i) if (board[i][col] == \'Q\') return false;', code)
-            code = re.sub(r'//\s*Check\s+this\s+row\s+on\s+left\s+side\s*\n?', '', code, flags=re.IGNORECASE)
             code = code.replace("`", "").strip()
 
             # Add missing standard C++ STL headers
@@ -745,12 +747,14 @@ def generate_code():
                 headers.append("#include <stack>")
             if ("sort(" in code or "max(" in code or "min(" in code or "reverse(" in code) and "<algorithm>" not in code:
                 headers.append("#include <algorithm>")
-            if ("INT_MAX" in code or "INT_MIN" in code) and "<climits>" not in code:
+            if ("INT_MAX" in code or "INT_MIN" in code or "LLONG_MAX" in code) and "<climits>" not in code:
                 headers.append("#include <climits>")
             if "function<" in code and "<functional>" not in code:
                 headers.append("#include <functional>")
-            if ("accumulate(" in code or "gcd(" in code or "lcm(" in code) and "<numeric>" not in code:
+            if ("accumulate(" in code or "gcd(" in code or "lcm(" in code or "iota(" in code) and "<numeric>" not in code:
                 headers.append("#include <numeric>")
+            if ("sqrt(" in code or "pow(" in code or "abs(" in code) and "<cmath>" not in code:
+                headers.append("#include <cmath>")
             if headers:
                 if "using namespace std;" in code:
                     code = "\n".join(headers) + "\n" + code
@@ -764,6 +768,13 @@ def generate_code():
                 code = f"{inc_str}class Solution {{\npublic:\n    {code}\n}};"
             elif "python" in language:
                 code = f"class Solution:\n    {code}"
+    else:
+        # Guarantee main() function exists for standalone compiled code (Programiz, online compilers)
+        if ("cpp" in language or "c++" in language or language == "c") and not re.search(r"\bmain\s*\(", code):
+            if language == "c":
+                code += "\n\nint main() {\n    printf(\"Solution compiled and executed successfully!\\n\");\n    return 0;\n}\n"
+            else:
+                code += "\n\nint main() {\n    std::cout << \"Solution compiled and executed successfully!\" << std::endl;\n    return 0;\n}\n"
 
     log.info("Synthesized %s code for '%s' (%d chars, leetcode=%s)", language, topic, len(code), is_leetcode)
     return jsonify({"status": "success", "code": code})
@@ -865,14 +876,28 @@ def decompose_goal():
         "   - Writing code: {\"type\": \"type\", \"field\": \"code editor textarea\", \"topic\": \"<Clean Title>\", \"label\": \"Write solution for <Clean Title>\"}\n"
         "   - Running code: {\"type\": \"click\", \"target\": \"Run Compile Execute\", \"label\": \"Run code\"}\n"
         "   - Submitting/verifying: {\"type\": \"submit_and_verify\", \"target\": \"Submit\", \"label\": \"Submit code and verify all testcases\"}\n"
-        "3. GitHub: https://github.com/new for repository creation, https://github.com/search?q=<query>&type=repositories for search\n"
+        "3. GitHub:\n"
+        "   - Create new repository: navigate to https://github.com/new\n"
+        "   - Repository name: {\"type\": \"type\", \"field\": \"Repository name\", \"value\": \"<repo_name>\", \"label\": \"Type repository name '<repo_name>'\"}\n"
+        "   - Private repository: if requested, click private: {\"type\": \"click\", \"target\": \"Private\", \"label\": \"Select Private visibility\"}\n"
+        "   - Add README: if requested, click checkbox: {\"type\": \"click\", \"target\": \"Add a README file\", \"label\": \"Check Add a README file\"}\n"
+        "   - Create button: {\"type\": \"click\", \"target\": \"Create repository\", \"label\": \"Click Create repository\"}\n"
+        "   - Search repos: navigate to https://github.com/search?q=<query>&type=repositories\n"
         "4. Gmail: https://mail.google.com/mail/u/0/#inbox?compose=new\n"
         "5. YouTube: https://www.youtube.com/results?search_query=<query>\n"
         "6. Canva: https://www.canva.com/presentations/ or https://www.canva.com\n"
         "7. Reddit: https://www.reddit.com/search/?q=<query>\n"
         "8. Wikipedia: https://en.wikipedia.org/wiki/Special:Search?search=<query>\n"
         "9. Google: https://www.google.com/search?q=<query>\n"
-        "10. Programiz: https://www.programiz.com/python-programming/online-compiler/\n"
+        "10. Programiz Online Compilers (Always choose the compiler matching the language in user goal):\n"
+        "    - C: https://www.programiz.com/c-programming/online-compiler/\n"
+        "    - C++: https://www.programiz.com/cpp-programming/online-compiler/\n"
+        "    - Python: https://www.programiz.com/python-programming/online-compiler/\n"
+        "    - Java: https://www.programiz.com/java-programming/online-compiler/\n"
+        "    - JavaScript: https://www.programiz.com/javascript/online-compiler/\n"
+        "    - Default if language not specified: Python compiler.\n"
+        "    - Writing code on compiler: {\"type\": \"type\", \"field\": \"code editor textarea\", \"topic\": \"<Clean Title>\", \"language\": \"c/cpp/python/java\", \"label\": \"Write <language> code for <Clean Title>\"}\n"
+        "    - Running code: {\"type\": \"click\", \"target\": \"Run Compile Execute\", \"label\": \"Run code\"}\n"
         "11. Universal Login / Sign In on ANY Website (X/Twitter, LinkedIn, Reddit, Quora, LeetCode, etc.):\n"
         "    - Security & Human-In-The-Loop Rule:\n"
         "    - When user asks to login/sign in or access a site requiring account, NEVER guess passwords or output fake credentials.\n"
@@ -881,6 +906,15 @@ def decompose_goal():
         '      * {"type": "wait_for_user", "label": "Please sign in to your account, then click Continue"}\n'
         "12. X (Twitter): https://x.com/ or https://x.com/login for login, https://x.com/search?q=<query> for search\n\n"
         "Examples:\n"
+        'Goal: "open github , create new repo , repo name photon , private , add readme file , create it"\n'
+        "JSON:\n"
+        "[\n"
+        '  {"type": "navigate", "url": "https://github.com/new", "label": "Open GitHub new repository page"},\n'
+        '  {"type": "type", "field": "Repository name", "value": "photon", "label": "Type repository name \'photon\'"},\n'
+        '  {"type": "click", "target": "Private", "label": "Select Private visibility"},\n'
+        '  {"type": "click", "target": "Add a README file", "label": "Check Add a README file"},\n'
+        '  {"type": "click", "target": "Create repository", "label": "Click Create repository"}\n'
+        "]\n\n"
         'Goal: "send an holiday message to didi for 2 weeks"\n'
         "JSON:\n"
         "[\n"
@@ -914,6 +948,27 @@ def decompose_goal():
         '  {"type": "type", "field": "code editor textarea", "topic": "Course Schedule", "label": "Write solution for Course Schedule"},\n'
         '  {"type": "click", "target": "Run Compile Execute", "label": "Run code"},\n'
         '  {"type": "submit_and_verify", "target": "Submit", "label": "Submit code and verify all testcases"}\n'
+        "]\n\n"
+        'Goal: "ode for pallindrome in c and run it"\n'
+        "JSON:\n"
+        "[\n"
+        '  {"type": "navigate", "url": "https://www.programiz.com/c-programming/online-compiler/", "label": "Open Programiz C compiler"},\n'
+        '  {"type": "type", "field": "code editor textarea", "topic": "palindrome", "language": "c", "label": "Write C code for palindrome"},\n'
+        '  {"type": "click", "target": "Run Compile Execute", "label": "Run code"}\n'
+        "]\n\n"
+        'Goal: "code for bubble sort in c++, run it"\n'
+        "JSON:\n"
+        "[\n"
+        '  {"type": "navigate", "url": "https://www.programiz.com/cpp-programming/online-compiler/", "label": "Open Programiz C++ compiler"},\n'
+        '  {"type": "type", "field": "code editor textarea", "topic": "bubble sort", "language": "cpp", "label": "Write C++ code for bubble sort"},\n'
+        '  {"type": "click", "target": "Run Compile Execute", "label": "Run code"}\n'
+        "]\n\n"
+        'Goal: "opwn programize and write code for complex calculator and run it"\n'
+        "JSON:\n"
+        "[\n"
+        '  {"type": "navigate", "url": "https://www.programiz.com/python-programming/online-compiler/", "label": "Open Programiz Python compiler"},\n'
+        '  {"type": "type", "field": "code editor textarea", "topic": "complex calculator", "language": "python", "label": "Write Python code for complex calculator"},\n'
+        '  {"type": "click", "target": "Run Compile Execute", "label": "Run code"}\n'
         "]\n\n"
         'Goal: "search python dict methods on mdn and click the first link"\n'
         "JSON:\n"
@@ -1066,7 +1121,7 @@ def agent_step():
     )
 
     decision = None
-    # Try text model (qwen2.5:3b), fallback to draft model if needed
+    # Try text model (qwen2.5:3b), fallback to draft model (0.5b) if needed
     for role in ("text", "draft"):
         try:
             resp = ollama_client.generate(
@@ -1076,53 +1131,85 @@ def agent_step():
             )
             raw = resp.text.strip()
             import re
-            m = re.search(r"\{.*\}", raw, re.DOTALL)
-            if m:
-                parsed = json.loads(m.group(0))
-                actions = parsed.get("actions") or []
-                thought = parsed.get("reasoning") or parsed.get("thought") or "Analyzing page and selecting best action."
-                is_done = bool(parsed.get("is_done", False))
 
-                # Normalize action schema
-                single_action = None
-                if actions and isinstance(actions, list) and len(actions) > 0:
-                    first = actions[0]
-                    single_action = {
-                        "type": first.get("type", "click"),
-                        "tag_id": first.get("tag_id"),
-                        "value": first.get("value"),
-                        "key": first.get("key"),
-                        "description": first.get("intent") or first.get("description") or f"{first.get('type')} on #{first.get('tag_id')}"
-                    }
-                    if first.get("type") == "done":
-                        is_done = True
-                elif parsed.get("action"):
-                    act = parsed.get("action")
-                    single_action = {
-                        "type": act.get("type", "click"),
-                        "tag_id": act.get("tag_id"),
-                        "value": act.get("value"),
-                        "key": act.get("key"),
-                        "description": act.get("description") or act.get("intent") or f"{act.get('type')}"
-                    }
+            # ── JSON Repair: fix common small-model output errors ──
+            # 1. Extract the JSON object (handle trailing text after the closing brace)
+            raw_candidate = raw
+            m = re.search(r"\{.*\}", raw_candidate, re.DOTALL)
+            if not m:
+                continue
+            json_str = m.group(0)
+            # 2. Fix missing commas between key-value pairs (common qwen2.5:0.5b error)
+            # Pattern: value (string/number/bool) followed by a newline and a new key without comma
+            json_str = re.sub(r'("|\d|true|false|null)\s*\n\s*(")', r'\1,\n\2', json_str)
+            # 3. Remove trailing commas before } or ]
+            json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
 
-                decision = {
-                    "thought": thought,
-                    "action": single_action or {"type": "done", "description": "Goal accomplished"},
-                    "actions": actions or ([single_action] if single_action else []),
-                    "is_done": is_done,
-                    "source": f"llm-{role}"
+            try:
+                parsed = json.loads(json_str)
+            except json.JSONDecodeError:
+                log.warning("Ollama %s JSON repair failed, skipping: %s...", role, json_str[:120])
+                continue
+
+            actions = parsed.get("actions") or []
+            thought = parsed.get("reasoning") or parsed.get("thought") or "Analyzing page and selecting best action."
+            is_done = bool(parsed.get("is_done", False))
+
+            # Normalize action schema
+            single_action = None
+            if actions and isinstance(actions, list) and len(actions) > 0:
+                first = actions[0]
+                single_action = {
+                    "type": first.get("type", "click"),
+                    "tag_id": first.get("tag_id"),
+                    "value": first.get("value"),
+                    "key": first.get("key"),
+                    "description": first.get("intent") or first.get("description") or f"{first.get('type')} on #{first.get('tag_id')}"
                 }
-                break
+                if first.get("type") == "done":
+                    is_done = True
+            elif parsed.get("action"):
+                act = parsed.get("action")
+                single_action = {
+                    "type": act.get("type", "click"),
+                    "tag_id": act.get("tag_id"),
+                    "value": act.get("value"),
+                    "key": act.get("key"),
+                    "description": act.get("description") or act.get("intent") or f"{act.get('type')}"
+                }
+
+            # ── Repetition-Aware is_done Heuristic ──
+            # If the LLM says done OR the proposed action exactly matches the last 2 history entries
+            # (meaning we're looping), force is_done to break the cycle.
+            if history and single_action and len(history) >= 2:
+                last_two = history[-2:]
+                proposed_fp = f"{single_action.get('type')}:{single_action.get('tag_id')}:{single_action.get('value', '')}"
+                history_fps = [f"{h.get('action')}:{h.get('target')}:{h.get('value', '')}" for h in last_two]
+                if all(fp == proposed_fp for fp in history_fps):
+                    log.warning("ReAct repetition heuristic: proposed action matches last 2 history entries — forcing is_done=True to break loop.")
+                    is_done = True
+
+            decision = {
+                "thought": thought,
+                "action": single_action or {"type": "done", "description": "Goal accomplished"},
+                "actions": actions or ([single_action] if single_action else []),
+                "is_done": is_done,
+                "source": f"llm-{role}"
+            }
+            log.info("ReAct [%s] is_done=%s action=%s", role, is_done, (single_action or {}).get("type", "done"))
+            break
         except Exception as e:
             log.warning("Ollama ReAct reasoning with role '%s' error: %s", role, e)
 
     if not decision:
+        # Fallback: if history shows we've been making progress (last action succeeded)
+        # return a neutral 'done' to avoid getting stuck
+        last_success = history and history[-1].get('success', False) if history else False
         decision = {
-            "thought": "Directing next action from page elements.",
-            "action": {"type": "done", "description": "Goal accomplished"},
+            "thought": "Unable to determine next action from page elements. Stopping to prevent infinite loop.",
+            "action": {"type": "done", "description": "Stopping: no valid action determined"},
             "actions": [],
-            "is_done": False,
+            "is_done": last_success,  # Only auto-done if last action actually worked
             "source": "fallback"
         }
 

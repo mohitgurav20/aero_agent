@@ -549,6 +549,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize status from background service worker
   chrome.runtime.sendMessage({ type: 'get_initial_state' }, (res) => {
+    if (chrome.runtime.lastError) return;
     if (res && res.status) {
       updateStatus(res.status.state, res.status.message);
     }
@@ -1232,6 +1233,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Retrieve high-fidelity 16kHz PCM audio from offscreen and transcribe via local Whisper
       chrome.runtime.sendMessage({ target: 'offscreen', type: 'stop_audio_recording' }, async (res) => {
+        if (chrome.runtime.lastError) return;
         if (res && res.audio_base64) {
           try {
             updateStatus('thinking', 'Transcribing with local Whisper AI...');

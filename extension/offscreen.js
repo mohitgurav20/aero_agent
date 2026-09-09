@@ -23,6 +23,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch(err => sendResponse({ success: false, error: err.message }));
       return true; // Keep channel open for async
 
+    case 'redact_screenshot':
+      if (typeof PIIRedactor !== 'undefined' && PIIRedactor.redactScreenshot) {
+        PIIRedactor.redactScreenshot(message.payload.image_base64, message.payload.sensitiveNodes || [])
+          .then(result => sendResponse({ success: true, result }))
+          .catch(err => sendResponse({ success: false, error: err.message }));
+      } else {
+        sendResponse({ success: false, error: 'PIIRedactor not loaded' });
+      }
+      return true;
+
     case 'start_audio_recording':
     case 'start_mic_recording':
       startAudioRecording()
