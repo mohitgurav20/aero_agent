@@ -362,6 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Helper: Reliably deliver floating summary modal to the active browser tab
+  // ── DELIVER FLOATING SUMMARY CARD TO WEBPAGE TAB ─────────────────────────
   async function deliverFloatingSummaryToPage(title, markdown) {
     const isInternalUrl = (url) => !url || url.startsWith('chrome://') || url.startsWith('edge://') || url.startsWith('about:') || url.startsWith('chrome-extension://');
 
@@ -374,7 +375,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (candidate && !isInternalUrl(candidate.url)) {
       targetTab = candidate;
     } else {
-      // 2. If current active tab is an internal page (e.g. chrome://extensions), find an open web tab
+      // 2. Check if any other open tab in current window is an ordinary web page
       const allTabs = await chrome.tabs.query({ currentWindow: true }).catch(() => []);
       const webTab = allTabs.find(t => t.url && !isInternalUrl(t.url));
       if (webTab) {
@@ -382,6 +383,29 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
           await chrome.tabs.update(webTab.id, { active: true });
         } catch (e) {}
+      } else if (candidate && candidate.id) {
+        // 3. Current tab is chrome://newtab or internal, and NO web tabs exist!
+        // Chrome strictly prohibits content scripts on chrome:// pages.
+        // Seamlessly navigate to https://www.google.com so the floating pop-up card can display!
+        try {
+          await chrome.tabs.update(candidate.id, { url: 'https://www.google.com' });
+          targetTab = candidate;
+          // Wait for tab navigation to complete
+          await new Promise(resolve => {
+            const timeout = setTimeout(resolve, 2500);
+            const listener = (tabId, changeInfo) => {
+              if (tabId === candidate.id && changeInfo.status === 'complete') {
+                chrome.tabs.onUpdated.removeListener(listener);
+                clearTimeout(timeout);
+                resolve();
+              }
+            };
+            chrome.tabs.onUpdated.addListener(listener);
+          });
+          await new Promise(r => setTimeout(r, 200));
+        } catch (err) {
+          console.error('[Popup] Could not navigate internal tab:', err);
+        }
       }
     }
 
@@ -390,7 +414,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return false;
     }
 
-    // Step 1: Ensure content script is running on target tab
+    // Step 1: Ensure content script is injected on target tab
     try {
       await chrome.scripting.executeScript({
         target: { tabId: targetTab.id },
@@ -398,10 +422,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }).catch(() => {});
     } catch (e) {}
 
-    // Small delay to allow script registration
-    await new Promise(r => setTimeout(r, 60));
+    await new Promise(r => setTimeout(r, 120));
 
-    // Step 2: Send message to content script
+    // Step 2: Send message to content script to pop up card
     let delivered = false;
     try {
       const resp = await chrome.tabs.sendMessage(targetTab.id, {
@@ -410,7 +433,9 @@ document.addEventListener('DOMContentLoaded', () => {
         summaryMarkdown: markdown
       });
       if (resp && resp.success) delivered = true;
-    } catch (err) {}
+    } catch (err) {
+      console.warn('[Popup] sendMessage to content script failed:', err);
+    }
 
     // Step 3: Direct programmatic execution fallback if message was missed
     if (!delivered) {
@@ -420,7 +445,9 @@ document.addEventListener('DOMContentLoaded', () => {
           func: (t, md) => {
             if (typeof window.showFloatingSummaryCard === 'function') {
               window.showFloatingSummaryCard(t, md);
+              return true;
             }
+            return false;
           },
           args: [title, markdown]
         });
@@ -430,55 +457,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     return delivered;
-  }
-
-  // ── MARKDOWN RENDERER FOR SIDEPANEL KNOWLEDGE BRIEFING ──────────────────────
-  function renderSummaryMarkdown(md) {
-    if (!md) return '<p style="color:#64748b;">No summary text generated.</p>';
-
-    // Parse Markdown tables into clean HTML tables
-    let text = md.replace(/((?:\|[^\n]+\|\r?\n)+)/g, (match) => {
-      const rows = match.trim().split(/\r?\n/).map(r => r.trim()).filter(Boolean);
-      if (rows.length < 2) return match;
-
-      let html = '<div style="overflow-x:auto; margin:8px 0; border:1px solid #e2e8f0; border-radius:6px;"><table style="width:100%; border-collapse:collapse; font-size:11px;">';
-      let hasHeader = false;
-
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        if (/^\|[-:\s|]+\|$/.test(row)) {
-          hasHeader = true;
-          continue;
-        }
-        const cells = row.split('|').slice(1, -1).map(c => c.trim());
-        if (i === 0 || (!hasHeader && i === 0)) {
-          html += '<thead><tr style="background:#f1f5f9; border-bottom:1px solid #cbd5e1;">';
-          cells.forEach(c => html += `<th style="padding:6px 8px; text-align:left; font-weight:700; color:#0f172a;">${escapeHtml(c)}</th>`);
-          html += '</tr></thead><tbody>';
-        } else {
-          const bg = i % 2 === 0 ? '#ffffff' : '#f8fafc';
-          html += `<tr style="background:${bg}; border-bottom:1px solid #f1f5f9;">`;
-          cells.forEach(c => html += `<td style="padding:5px 8px; color:#334155; line-height:1.4;">${escapeHtml(c)}</td>`);
-          html += '</tr>';
-        }
-      }
-      if (hasHeader) html += '</tbody>';
-      html += '</table></div>';
-      return html;
-    });
-
-    return text
-      .replace(/^#### (.*$)/gim, '<h5 style="font-size:11.5px; font-weight:700; color:#475569; margin:10px 0 3px 0; text-transform:uppercase; letter-spacing:0.5px;">$1</h5>')
-      .replace(/^### (.*$)/gim, '<h4 style="font-size:12.5px; font-weight:700; color:#0f172a; margin:12px 0 4px 0; border-bottom:1px solid #f1f5f9; padding-bottom:2px;">$1</h4>')
-      .replace(/^## (.*$)/gim, '<h3 style="font-size:13.5px; font-weight:700; color:#0f172a; margin:14px 0 6px 0;">$1</h3>')
-      .replace(/^# (.*$)/gim, '<h2 style="font-size:14.5px; font-weight:800; color:#0f172a; margin:16px 0 8px 0;">$1</h2>')
-      .replace(/\*\*(.*?)\*\*/gim, '<strong style="color:#0f172a;">$1</strong>')
-      .replace(/\*(.*?)\*/gim, '<em>$1</em>')
-      .replace(/`([^`]+)`/gim, '<code style="background:#f1f5f9; padding:2px 5px; border-radius:4px; font-size:11px; font-family:monospace; color:#e11d48;">$1</code>')
-      .replace(/^> (.*$)/gim, '<blockquote style="border-left:3px solid #f43f5e; margin:6px 0; padding:4px 10px; background:#fff1f2; border-radius:0 6px 6px 0; color:#881337; font-size:11px; font-style:italic;">$1</blockquote>')
-      .replace(/^- (.*$)/gim, '<li style="margin-left:14px; margin-bottom:4px; font-size:11.5px; line-height:1.5; color:#334155;">$1</li>')
-      .replace(/^\d+\.\s+(.*$)/gim, '<li style="margin-left:14px; margin-bottom:4px; font-size:11.5px; line-height:1.5; color:#334155;">$1</li>')
-      .replace(/\n\n/gim, '<div style="height:6px;"></div>');
   }
 
   // ── EXECUTABLE SUMMARIZATION WORKFLOW ──────────────────────────────────────
@@ -554,77 +532,50 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       } catch (e) {}
 
-      // Pop up floating Knowledge Briefing Card on open web tab (if applicable)
+      // Pop up floating Knowledge Briefing Card directly on the Chrome tab
       const delivered = await deliverFloatingSummaryToPage(finalTitle, currentSummaryMarkdown);
 
-      const wordCount = currentSummaryMarkdown.trim().split(/\s+/).filter(Boolean).length;
-      const readingTime = Math.max(1, Math.ceil(wordCount / 200));
-      const formattedBody = renderSummaryMarkdown(currentSummaryMarkdown);
-
-      // Render the Knowledge Briefing Card directly inside the sidepanel reasoningBox
       reasoningBox.innerHTML = `
-        <div style="background:#ffffff; border:1.5px solid #fecdd3; border-radius:10px; padding:10px; box-shadow:0 2px 10px rgba(244,63,94,0.06);">
-          <!-- Header -->
-          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; border-bottom:1px solid #f1f5f9; padding-bottom:8px; gap:8px;">
-            <div style="display:flex; align-items:center; gap:6px; overflow:hidden; flex:1;">
-              <span style="font-size:16px;">📑</span>
-              <strong style="font-size:12px; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${escapeHtml(finalTitle)}">${escapeHtml(finalTitle)}</strong>
-            </div>
-            <div style="display:flex; align-items:center; gap:5px; flex-shrink:0;">
-              <button id="summary-copy-btn" title="Copy markdown to clipboard" style="border:1px solid #cbd5e1; background:#ffffff; color:#334155; font-size:10.5px; font-weight:600; padding:3px 7px; border-radius:6px; cursor:pointer; display:flex; align-items:center; gap:3px; transition:all 0.15s ease;">
-                <span>📋</span> Copy
-              </button>
-              <button id="summary-open-tab-btn" title="Open full executive report in a new tab" style="border:1px solid #f43f5e; background:#fff1f2; color:#e11d48; font-size:10.5px; font-weight:600; padding:3px 7px; border-radius:6px; cursor:pointer; display:flex; align-items:center; gap:3px; transition:all 0.15s ease;">
-                <span>🗗</span> Full Tab
-              </button>
-            </div>
-          </div>
-
-          <!-- Status / Stats Bar -->
-          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; font-size:10.5px; color:#64748b;">
-            <span style="display:inline-flex; align-items:center; gap:4px; font-weight:600; color:${delivered ? '#059669' : '#0284c7'};">
-              ${delivered ? '🟢 Mirrored on Tab & Sidepanel' : 'ℹ️ Direct Sidepanel View (Tab restricted by Chrome)'}
-            </span>
-            <span>${wordCount} words • ~${readingTime}m read</span>
-          </div>
-
-          <!-- Summary Body -->
-          <div id="summary-rendered-body" style="max-height:270px; overflow-y:auto; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px; font-size:11.5px; line-height:1.55; color:#1e293b; user-select:text;">
-            ${formattedBody}
-          </div>
+        <div style="color:#059669; font-weight:700; margin-bottom:4px; display:flex; align-items:center; gap:6px;">
+          <span>📑 Knowledge Briefing Popped Up on Tab</span>
+        </div>
+        <div style="font-size:11.5px; color:#334155; line-height:1.45;">
+          ${delivered ? 'Interactive floating pop-up card is now visible directly on your Chrome tab! Click <strong>✕</strong> on the card (or press Esc) to close it.' : 'Summary generated! Switch to an open webpage tab to view the floating pop-up card.'}
+        </div>
+        <div style="margin-top:8px; display:flex; gap:8px;">
+          <button id="reopen-float-card-btn" style="border:1px solid #f43f5e; background:#fff1f2; color:#e11d48; font-size:11px; font-weight:700; padding:5px 12px; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:5px; transition:all 0.15s ease;">
+            <span>🗗</span> Pop Up Card Again
+          </button>
+          <button id="copy-summary-btn" style="border:1px solid #cbd5e1; background:#ffffff; color:#334155; font-size:11px; font-weight:600; padding:5px 10px; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:4px; transition:all 0.15s ease;">
+            <span>📋</span> Copy Text
+          </button>
         </div>
       `;
 
-      // Wire Copy button
-      const copyBtn = document.getElementById('summary-copy-btn');
+      const reopenBtn = document.getElementById('reopen-float-card-btn');
+      if (reopenBtn) {
+        reopenBtn.addEventListener('click', () => {
+          deliverFloatingSummaryToPage(finalTitle, currentSummaryMarkdown);
+        });
+      }
+
+      const copyBtn = document.getElementById('copy-summary-btn');
       if (copyBtn) {
         copyBtn.addEventListener('click', async () => {
           try {
             await navigator.clipboard.writeText(currentSummaryMarkdown);
             copyBtn.innerHTML = '<span>✓</span> Copied!';
             copyBtn.style.color = '#059669';
-            copyBtn.style.borderColor = '#059669';
             setTimeout(() => {
-              copyBtn.innerHTML = '<span>📋</span> Copy';
+              copyBtn.innerHTML = '<span>📋</span> Copy Text';
               copyBtn.style.color = '#334155';
-              copyBtn.style.borderColor = '#cbd5e1';
-            }, 2000);
-          } catch (e) {
-            console.error('Clipboard copy failed:', e);
-          }
-        });
-      }
-
-      // Wire Open Full Tab button
-      const openTabBtn = document.getElementById('summary-open-tab-btn');
-      if (openTabBtn) {
-        openTabBtn.addEventListener('click', () => {
-          chrome.tabs.create({ url: chrome.runtime.getURL('summary_viewer.html') });
+            }, 1800);
+          } catch (e) {}
         });
       }
 
       updateStatus('online', '✓ Summary Generated');
-      speakAgentMessage('Knowledge briefing ready in sidepanel');
+      speakAgentMessage('Summary card popped up on webpage');
     } catch (err) {
       console.error('[Popup] Summarization workflow failed:', err);
       reasoningBox.innerHTML = `<span style="color:#ef4444;">Error generating summary: ${escapeHtml(err.message)}</span>`;

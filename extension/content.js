@@ -135,6 +135,10 @@
           0% { box-shadow: 0 0 16px rgba(56, 189, 248, 0.65); }
           100% { box-shadow: 0 0 28px rgba(56, 189, 248, 0.95); }
         }
+        @keyframes aeroSlideDown {
+          0% { opacity: 0; transform: translateY(-20px) scale(0.97); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
       `;
       (document.head || document.documentElement).appendChild(styleEl);
     }
