@@ -2508,6 +2508,8 @@ async function runStepQueue(tabId) {
     activeTask.status = 'done';
     broadcastStatus('online', `✓ Goal completed: ${activeTask.goal.slice(0, 60)}`);
     broadcastStepProgress();
+    // ── CRITICAL FIX: null activeTask so onUpdated never re-triggers this completed task ──
+    activeTask = null;
     return;
   }
 
@@ -4327,6 +4329,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 
   if (changeInfo.status === 'complete' && activeTask) {
+    // If the active task is already done or has no more pending steps, ignore — don't re-run!
+    if (activeTask.status === 'done' || activeTask.status === 'complete') {
+      console.log('[SQ] onUpdated ignored because activeTask is already done.');
+      return;
+    }
     // If the active task is waiting for user sign-in or has a paused step, do NOT auto-resume!
     if (activeTask.status === 'waiting_user_input' || activeTask.steps?.some(s => s.status === 'paused')) {
       console.log('[SQ] onUpdated ignored because activeTask is waiting for user sign-in.');
