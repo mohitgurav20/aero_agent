@@ -3682,23 +3682,67 @@ async function runStepQueue(tabId) {
     broadcastStepProgress();
 
     // 1. Click the Submit button on LeetCode
+    let clickedSubmit = false;
     try {
-      await chrome.scripting.executeScript({
+      const clickResult = await chrome.scripting.executeScript({
         target: { tabId: targetTabId },
         world: 'MAIN',
         func: () => {
-          const submitBtn = document.querySelector('button[data-e2e-locator="console-submit-button"], [data-e2e-locator*="submit"], button.bg-green-60, [data-cy="submit-code-btn"]')
-            || Array.from(document.querySelectorAll('button, div[role="button"], [role="button"]')).find(b => {
-                 const t = (b.textContent || b.innerText || '').trim().toLowerCase();
-                 return t === 'submit' || t.startsWith('submit');
-               });
-          if (submitBtn) {
-            submitBtn.click();
-            return true;
+          // Strategy 1: data-e2e-locator (all LeetCode variants)
+          let btn = document.querySelector(
+            'button[data-e2e-locator="console-submit-button"],' +
+            'button[data-e2e-locator="console-run-button"]' // NOTE: will be filtered below
+          );
+          // Prefer only the submit button, not run
+          btn = document.querySelector('button[data-e2e-locator="console-submit-button"]');
+
+          // Strategy 2: 2024 LeetCode UI — green button in the toolbar
+          if (!btn) {
+            btn = document.querySelector(
+              'button.bg-green-s, button[class*="bg-green"], ' +
+              'button[class*="submit"]:not([class*="run"]), ' +
+              '[data-cy="submit-code-btn"]'
+            );
           }
-          return false;
+
+          // Strategy 3: Text-based match — find button whose FULL text is exactly "Submit"
+          // Carefully exclude "Run Code", "Run", "Run All" buttons
+          if (!btn) {
+            const allBtns = Array.from(document.querySelectorAll('button, [role="button"]'));
+            btn = allBtns.find(b => {
+              const rawText = (b.textContent || b.innerText || '').trim();
+              // Must be exactly "Submit" or start with "Submit" but not "Submit All" / "Submit Feedback"
+              return /^Submit$/i.test(rawText) || rawText.toLowerCase() === 'submit';
+            });
+          }
+
+          // Strategy 4: Look for the rightmost green button in the coding header toolbar
+          if (!btn) {
+            const toolbarBtns = Array.from(document.querySelectorAll(
+              'div[class*="action-bar"] button, div[class*="toolbar"] button, ' +
+              'div[class*="actionBar"] button, div[class*="footer"] button'
+            ));
+            btn = toolbarBtns.find(b => {
+              const t = (b.textContent || '').trim().toLowerCase();
+              return t === 'submit' || t.startsWith('submit');
+            });
+          }
+
+          if (btn) {
+            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            btn.click();
+            return { clicked: true, btnText: (btn.textContent || '').trim() };
+          }
+          return { clicked: false };
         }
       });
+      clickedSubmit = clickResult?.[0]?.result?.clicked || false;
+      if (clickedSubmit) {
+        console.log('[SQ] Submit button clicked:', clickResult?.[0]?.result?.btnText);
+      } else {
+        console.warn('[SQ] Submit button NOT found on page — user may need to click manually');
+        broadcastStatus('acting', '⚠️ Could not find Submit button. Please click Submit manually if needed.');
+      }
     } catch (e) {
       console.warn('[SQ] Error clicking Submit button:', e.message);
     }
