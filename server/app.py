@@ -915,8 +915,10 @@ def decompose_goal():
         "    - When user asks to login/sign in or access a site requiring account, NEVER guess passwords or output fake credentials.\n"
         "    - The agent navigates to the login/site page, then uses 'wait_for_user' to safely pause and wait for the user to sign in:\n"
         '      * {"type": "navigate", "url": "<site_login_url>", "label": "Open login page"}\n'
-        '      * {"type": "wait_for_user", "label": "Please sign in to your account, then click Continue"}\n'
-        "12. X (Twitter): https://x.com/ or https://x.com/login for login, https://x.com/search?q=<query> for search\n\n"
+        "12. X (Twitter): https://x.com/ or https://x.com/login for login, https://x.com/search?q=<query> for search\n"
+        "13. LinkedIn & Universal Search Execution:\n"
+        "    - LinkedIn Search: ALWAYS navigate directly to https://www.linkedin.com/search/results/all/?keywords=<query>\n"
+        "    - Search execution: When typing a query into any website search box, ALWAYS follow the typing step with: {\"type\": \"press_key\", \"key\": \"Enter\", \"label\": \"Submit search\"} unless navigating directly to the search URL.\n\n"
         "Examples:\n"
         'Goal: "open github create new repo , repo name walnut , discreption walnuts have more fat , add readme file , create it"\n'
         "JSON:\n"
@@ -986,6 +988,12 @@ def decompose_goal():
         "JSON:\n"
         "[\n"
         '  {"type": "navigate", "url": "https://developer.mozilla.org/en-US/search?q=python+dict+methods", "label": "Search MDN for \'python dict methods\'"},\n'
+        '  {"type": "click", "target": "first search result", "label": "Click first search result"}\n'
+        "]\n\n"
+        'Goal: "open linkdin search for gsoc contributor and search"\n'
+        "JSON:\n"
+        "[\n"
+        '  {"type": "navigate", "url": "https://www.linkedin.com/search/results/all/?keywords=gsoc%20contributor", "label": "Search LinkedIn for \'gsoc contributor\'"},\n'
         '  {"type": "click", "target": "first search result", "label": "Click first search result"}\n'
         "]\n\n"
         "Output ONLY the JSON array. No markdown commentary, no explanations.\n\n"

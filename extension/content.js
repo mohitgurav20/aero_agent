@@ -930,6 +930,15 @@
       } catch (e) { }
       element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 
+      // Check if typing into a search input (LinkedIn, YouTube, Amazon, Google, etc.)
+      const isSearchInput = element.type === 'search' ||
+        element.getAttribute('role') === 'combobox' ||
+        element.getAttribute('role') === 'searchbox' ||
+        (element.getAttribute('aria-label') || '').toLowerCase().includes('search') ||
+        (element.getAttribute('placeholder') || '').toLowerCase().includes('search') ||
+        (element.name || '').toLowerCase().includes('search') ||
+        window.location.hostname.includes('linkedin.com');
+
       // On Gmail, commit recipient with Enter and Tab keys if typing an email address into To/Cc/Bcc input
       const isGmail = window.location.hostname.includes('google') || window.location.hostname.includes('gmail');
       if (isGmail && text.includes('@')) {
@@ -940,7 +949,27 @@
           element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true, cancelable: true }));
         } catch (e) { }
       }
-      if (!isGmail) {
+
+      if (isSearchInput) {
+        // Dispatch Enter key events on search inputs so they submit cleanly without dropping focus
+        try {
+          element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+          element.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+          element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+        } catch (e) { }
+        // On LinkedIn, also look for the "See all results" typeahead dropdown option and trigger it
+        if (window.location.hostname.includes('linkedin.com')) {
+          await sleep(250);
+          const seeAll = Array.from(document.querySelectorAll('.search-global-typeahead__search-dropdown a, .search-global-typeahead__listitem a, button, a')).find(el => {
+            const t = (el.textContent || '').trim().toLowerCase();
+            return t.includes('see all results') || (text && t.includes(text.toLowerCase()) && t.includes('see all'));
+          });
+          if (seeAll) {
+            console.log('[Content] Clicking LinkedIn See all results dropdown item:', seeAll);
+            try { seeAll.click(); } catch (_) { }
+          }
+        }
+      } else if (!isGmail) {
         element.dispatchEvent(new Event('blur', { bubbles: true, composed: true }));
       }
 
@@ -1354,7 +1383,7 @@
       }
 
       const topLink = document.querySelector(
-        '#search a:has(h3), .g a:has(h3), [data-sokoban-container] a:has(h3), a:has(h3), #rso a:has(h3), #rso a, div[data-component-type="s-search-result"] h2 a, .s-result-item h2 a, div[data-cy="title-recipe"] a, ytd-video-renderer a#thumbnail, ytd-video-renderer h3 a, ytd-rich-item-renderer a#thumbnail, [data-testid="results-list"] a, div[data-testid="results-list"] div[data-testid="search-result"] a, a[data-testid="search-result-title"], a.Link__StyledLink-sc-nb9098-0, div.search-title a, a.v-align-middle, div.f4.text-normal a, ul.repo-list li a, a[href*="/"][data-testid*="result"]'
+        '.entity-result__title-text a, a.app-aware-link[href*="/in/"], a.app-aware-link[href*="/company/"], #search a:has(h3), .g a:has(h3), [data-sokoban-container] a:has(h3), a:has(h3), #rso a:has(h3), #rso a, div[data-component-type="s-search-result"] h2 a, .s-result-item h2 a, div[data-cy="title-recipe"] a, ytd-video-renderer a#thumbnail, ytd-video-renderer h3 a, ytd-rich-item-renderer a#thumbnail, [data-testid="results-list"] a, div[data-testid="results-list"] div[data-testid="search-result"] a, a[data-testid="search-result-title"], a.Link__StyledLink-sc-nb9098-0, div.search-title a, a.v-align-middle, div.f4.text-normal a, ul.repo-list li a, a[href*="/"][data-testid*="result"]'
       );
       if (topLink) {
         console.log('[Content] Matched top search result link:', topLink);
@@ -1560,7 +1589,9 @@
       const hostname = window.location.hostname;
       let topItem = null;
 
-      if (hostname.includes('wikipedia.org')) {
+      if (hostname.includes('linkedin.com')) {
+        topItem = document.querySelector('.entity-result__title-text a, a.app-aware-link[href*="/in/"], a.app-aware-link[href*="/company/"], ul.reusable-search__entity-result-list li a, .search-results-container a.app-aware-link, .search-results-container a');
+      } else if (hostname.includes('wikipedia.org')) {
         topItem = document.querySelector('.mw-search-results li a, .mw-search-result-heading a, .searchresults a');
       } else if (hostname.includes('youtube.com')) {
         topItem = document.querySelector('ytd-video-renderer a#video-title, #contents ytd-video-renderer a#video-title, ytd-rich-item-renderer a#video-title, a#video-title');
@@ -1924,6 +1955,21 @@
                 result.success = true;
                 result.page_changed = true;
                 break;
+              }
+
+              // LinkedIn: click "See all results" or submit button if on LinkedIn
+              if (window.location.hostname.includes('linkedin.com')) {
+                const seeAll = Array.from(document.querySelectorAll('.search-global-typeahead__search-dropdown a, .search-global-typeahead__listitem a, button, a')).find(el => {
+                  const t = (el.textContent || '').trim().toLowerCase();
+                  return t.includes('see all results') || t.includes('see all');
+                });
+                if (seeAll) {
+                  console.log('[Content] Clicking LinkedIn See all results on Enter:', seeAll);
+                  await simulateClick(seeAll);
+                  result.success = true;
+                  result.page_changed = true;
+                  break;
+                }
               }
 
               // Gmail: click Send button if on Gmail and intent is Send email
