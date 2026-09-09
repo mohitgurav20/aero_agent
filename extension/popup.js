@@ -372,7 +372,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (!targetTab || !targetTab.id || isInternalUrl(targetTab.url)) {
       // Active tab is chrome://newtab or restricted — cannot inject
-      console.warn('[Popup] Active tab is restricted (chrome://*), floating card cannot be injected.');
+      console.log('[Popup] Active tab is restricted (chrome://*), floating card cannot be injected.');
       return false;
     }
 
@@ -446,6 +446,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const activeTab = tabs?.[0];
         sourceTitle = activeTab?.title || 'Active Webpage';
 
+        // Check if current tab is a restricted chrome:// page
+        const tabUrl = activeTab?.url || '';
+        const isRestrictedTab = !tabUrl || tabUrl.startsWith('chrome://') || tabUrl.startsWith('edge://') || tabUrl.startsWith('about:') || tabUrl.startsWith('chrome-extension://');
+
+        if (isRestrictedTab) {
+          reasoningBox.innerHTML = `<span style="color:#f59e0b; font-weight:600;">⚠️ You're on a browser page (New Tab, Settings, etc.) which cannot be summarized.<br><br>Please navigate to a <strong>webpage</strong> first, then click Summarize — or upload a PDF using the 📎 button.</span>`;
+          updateStatus('online', 'Open a webpage to summarize');
+          return;
+        }
+
         if (activeTab?.id) {
           const res = await chrome.tabs.sendMessage(activeTab.id, { type: 'scrape_page_content' }).catch(() => null);
           if (res && res.payload && res.payload.text) {
@@ -464,6 +474,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateStatus('online', 'No content to summarize');
         return;
       }
+
 
       const resp = await fetch('http://127.0.0.1:5000/api/summarize', {
         method: 'POST',
