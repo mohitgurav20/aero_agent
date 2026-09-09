@@ -874,8 +874,17 @@ def decompose_goal():
         "   - Direct problem slug: https://leetcode.com/problems/<slug>/ where slug is lowercase hyphenated.\n"
         "   - If current_url is already on the problem page, do NOT add a navigate step.\n"
         "   - Writing code: {\"type\": \"type\", \"field\": \"code editor textarea\", \"topic\": \"<Clean Title>\", \"label\": \"Write solution for <Clean Title>\"}\n"
-        "   - Running code: {\"type\": \"click\", \"target\": \"Run Compile Execute\", \"label\": \"Run code\"}\n"
         "   - Submitting/verifying: {\"type\": \"submit_and_verify\", \"target\": \"Submit\", \"label\": \"Submit code and verify all testcases\"}\n"
+        "   - Compound Coding + Email Task (e.g. 'solve <problem> on leetcode and email the solution to <email>'):\n"
+        "     You MUST generate ALL steps in order:\n"
+        "     1. Navigate to LeetCode problem.\n"
+        "     2. Type solution in code editor.\n"
+        "     3. Run code and submit_and_verify.\n"
+        "     4. Navigate to Gmail: https://mail.google.com/mail/u/0/#inbox?compose=new\n"
+        "     5. Type recipient email into 'to recipients'.\n"
+        "     6. Type subject into 'subject'.\n"
+        "     7. Type message body with solution into 'message body'.\n"
+        "     8. Click send: {\"type\": \"click\", \"target\": \"Send\", \"label\": \"Send email\"}\n"
         "3. GitHub:\n"
         "   - Create new repository: navigate to https://github.com/new\n"
         "   - Repository name: {\"type\": \"type\", \"field\": \"Repository name\", \"value\": \"<repo_name>\", \"label\": \"Type repository name '<repo_name>'\"}\n"
@@ -1032,6 +1041,12 @@ def decompose_goal():
                                 "direction": s.get("direction"),
                                 "label": lbl
                             })
+
+                    # Rewrite mailto: URLs to official Gmail web compose URL
+                    for s in valid_steps:
+                        if s.get("url") and s["url"].startswith("mailto:"):
+                            s["url"] = "https://mail.google.com/mail/u/0/#inbox?compose=new"
+                            s["label"] = "Open Gmail compose"
 
                     # Online compilers (Programiz) do not have submit/verification buttons; remove stray submit_and_verify
                     has_prog = any("programiz.com" in (s.get("url") or "").lower() for s in valid_steps)

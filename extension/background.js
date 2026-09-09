@@ -1629,18 +1629,51 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
             return step;
           });
 
-        // Prune stray email steps from coding platform plans
-        const isCodingPlan = normalized.some(s => (s.url && (s.url.includes('leetcode.com') || s.url.includes('programiz.com'))) || s.type === 'submit_and_verify' || (s.field && s.field.includes('code')));
-        if (isCodingPlan) {
-          const hasRealGmail = normalized.some(s => s.type === 'navigate' && s.url?.includes('mail.google.com'));
-          if (!hasRealGmail) {
-            normalized = normalized.filter(s => {
-              const fld = (s.field || '').toLowerCase();
-              const lbl = (s.label || '').toLowerCase();
-              const isEmailStep = (s.type === 'type' && (fld.includes('recipient') || fld.includes('to') || fld.includes('subject') || fld.includes('message body'))) ||
-                                  (s.type === 'click' && (lbl.includes('send email') || lbl.includes('send mail')));
-              return !isEmailStep;
+        // Check if the user explicitly requested an email action in the query
+        const userExplicitlyWantsEmail = /\b(?:email|mail|gmail|send\s+(?:the\s+)?code\s+to|send\s+(?:the\s+)?solution\s+to)\b/i.test(query) || /@/.test(query);
+
+        // Rewrite any mailto: URLs to official Gmail web compose URL
+        normalized.forEach(s => {
+          if (s.url && s.url.startsWith('mailto:')) {
+            s.url = 'https://mail.google.com/mail/u/0/#inbox?compose=new';
+            s.label = 'Open Gmail compose';
+          }
+        });
+
+        // If user explicitly requested email in a coding task, ensure we have Gmail navigation and send steps
+        if (userExplicitlyWantsEmail) {
+          const hasGmailNav = normalized.some(s => s.type === 'navigate' && s.url?.includes('mail.google.com'));
+          if (!hasGmailNav) {
+            const firstEmailTypeIdx = normalized.findIndex(s => s.type === 'type' && (s.field?.includes('recipient') || s.field?.includes('to') || s.field?.includes('subject') || s.field?.includes('message body')));
+            const insertIdx = firstEmailTypeIdx !== -1 ? firstEmailTypeIdx : normalized.length;
+            normalized.splice(insertIdx, 0, {
+              type: 'navigate',
+              url: 'https://mail.google.com/mail/u/0/#inbox?compose=new',
+              label: 'Open Gmail compose'
             });
+          }
+          const hasSendStep = normalized.some(s => (s.label || '').toLowerCase().includes('send') || (s.target || '').toLowerCase().includes('send'));
+          if (!hasSendStep) {
+            normalized.push({
+              type: 'click',
+              target: 'Send',
+              label: 'Send email'
+            });
+          }
+        } else {
+          // Prune stray hallucinated email steps ONLY IF the user did NOT request email
+          const isCodingPlan = normalized.some(s => (s.url && (s.url.includes('leetcode.com') || s.url.includes('programiz.com'))) || s.type === 'submit_and_verify' || (s.field && s.field.includes('code')));
+          if (isCodingPlan) {
+            const hasRealGmail = normalized.some(s => s.type === 'navigate' && s.url?.includes('mail.google.com'));
+            if (!hasRealGmail) {
+              normalized = normalized.filter(s => {
+                const fld = (s.field || '').toLowerCase();
+                const lbl = (s.label || '').toLowerCase();
+                const isEmailStep = (s.type === 'type' && (fld.includes('recipient') || fld.includes('to') || fld.includes('subject') || fld.includes('message body'))) ||
+                                    (s.type === 'click' && (lbl.includes('send email') || lbl.includes('send mail')));
+                return !isEmailStep;
+              });
+            }
           }
         }
 
