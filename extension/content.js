@@ -1315,7 +1315,7 @@
 
     const composeDialog = document.querySelector('div[role="dialog"], div.AD, table.Ao, div[aria-label*="New Message" i]') || document;
 
-    if (rawTarget.includes('recipient') || rawTarget.includes('to')) {
+    if (!rawTarget.includes('code') && !rawTarget.includes('editor') && (rawTarget.includes('recipient') || /\bto\b/i.test(rawTarget))) {
       const toInput = composeDialog.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i], input[aria-label*="Recipients" i], [role="combobox"] input, td.Ao input, input.agP')
         || document.querySelector('input[name="to"], input[peoplekit-id], input[aria-label*="To" i], input[aria-label*="Recipients" i], input.agP')
         || composeDialog.querySelector('input[type="text"], input:not([type])');
@@ -1774,7 +1774,7 @@
         const tgt = (step.target || '').toLowerCase();
         const isSubject = desc.includes('subject') || field.includes('subject') || tgt.includes('subject');
         const isBody = desc.includes('body') || desc.includes('message') || field.includes('body') || field.includes('message') || tgt.includes('body');
-        const isRecipient = !isSubject && !isBody && (desc.includes('recipient') || desc.includes('to') || field.includes('recipient') || field.includes('to') || tgt.includes('recipient'));
+        const isRecipient = !isSubject && !isBody && !desc.includes('code') && !desc.includes('editor') && !field.includes('code') && !field.includes('editor') && (desc.includes('recipient') || /\bto\b/i.test(desc) || field.includes('recipient') || /\bto\b/i.test(field) || tgt.includes('recipient'));
         isCompose = desc.includes('compose') || tgt.includes('compose');
         isSend = desc.includes('send') || tgt.includes('send');
 

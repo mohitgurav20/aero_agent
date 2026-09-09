@@ -1660,7 +1660,7 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
         if (userExplicitlyWantsEmail) {
           const hasGmailNav = normalized.some(s => s.type === 'navigate' && s.url?.includes('mail.google.com'));
           if (!hasGmailNav) {
-            const firstEmailTypeIdx = normalized.findIndex(s => s.type === 'type' && (s.field?.includes('recipient') || s.field?.includes('to') || s.field?.includes('subject') || s.field?.includes('message body')));
+            const firstEmailTypeIdx = normalized.findIndex(s => s.type === 'type' && !s.field?.includes('code') && !s.field?.includes('editor') && (s.field?.includes('recipient') || /\bto\b/i.test(s.field || '') || s.field?.includes('subject') || s.field?.includes('message body')));
             const insertIdx = firstEmailTypeIdx !== -1 ? firstEmailTypeIdx : normalized.length;
             normalized.splice(insertIdx, 0, {
               type: 'navigate',
@@ -1685,7 +1685,7 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
               normalized = normalized.filter(s => {
                 const fld = (s.field || '').toLowerCase();
                 const lbl = (s.label || '').toLowerCase();
-                const isEmailStep = (s.type === 'type' && (fld.includes('recipient') || fld.includes('to') || fld.includes('subject') || fld.includes('message body'))) ||
+                const isEmailStep = (s.type === 'type' && !fld.includes('code') && !fld.includes('editor') && (fld.includes('recipient') || /\bto\b/i.test(fld) || fld.includes('subject') || fld.includes('message body'))) ||
                                     (s.type === 'click' && (lbl.includes('send email') || lbl.includes('send mail')));
                 return !isEmailStep;
               });
@@ -2331,7 +2331,10 @@ async function inspectAuthPageFields(tabId) {
         const title = (document.title || '').toLowerCase();
         const url = window.location.href.toLowerCase();
 
-        // 0. FIRST: Check if the user is ALREADY logged in to an authenticated web app
+        // 0. FIRST: Check if the user is ALREADY logged in to an authenticated web app or on a site that never needs auth
+        if (url.includes('programiz.com')) {
+          return { isAuth: false, hasOtpOr2Fa: false, siteName: '', fields: [], ssoButtons: [] };
+        }
         const isGmailLoggedIn = url.includes('mail.google.com/mail') && (
           document.querySelector('a[aria-label*="Google Account"], div[aria-label*="Google Account"], img[alt*="Google Account"], [aria-label="Compose"], div[gh="cm"]') !== null ||
           document.querySelector('input[aria-label="Search mail"], div[role="navigation"]') !== null
@@ -2708,7 +2711,7 @@ async function runStepQueue(tabId) {
 
   // ── CROSS-DOMAIN SAFETY GUARD: PRUNE STRAY EMAIL ACTIONS ON CODING SITES ──
   const isCodingPlatformActive = currentTabUrl.includes('leetcode.com') || currentTabUrl.includes('programiz.com');
-  const isStrayEmailStep = (step.type === 'type' && (step.field?.includes('recipient') || step.field?.includes('to') || step.field?.includes('subject') || (step.label || '').toLowerCase().includes('recipient') || (step.label || '').toLowerCase().includes('subject line'))) ||
+  const isStrayEmailStep = (step.type === 'type' && !step.field?.includes('code') && !step.field?.includes('editor') && !(step.label || '').toLowerCase().includes('code') && !(step.label || '').toLowerCase().includes('solution') && (step.field?.includes('recipient') || /\bto\b/i.test(step.field || '') || step.field?.includes('subject') || (step.label || '').toLowerCase().includes('recipient') || (step.label || '').toLowerCase().includes('subject line'))) ||
                            (step.type === 'click' && (step.label || '').toLowerCase().includes('send email') && !currentTabUrl.includes('mail.google.com'));
   if (isCodingPlatformActive && isStrayEmailStep) {
     console.warn('[SQ] Cross-domain guard: automatically pruning stray email step on coding site:', step.label);
@@ -2725,7 +2728,7 @@ async function runStepQueue(tabId) {
       console.log('[SQ] Dynamically grounding email with live extracted findings:', activeTask.extractedFindings);
       broadcastStatus('thinking', 'Synthesizing email from live browser search findings...');
       try {
-        const recipientStep = activeTask.steps.find(s => s.field?.includes('recipient') || s.field?.includes('to'));
+        const recipientStep = activeTask.steps.find(s => !s.field?.includes('code') && !s.field?.includes('editor') && (s.field?.includes('recipient') || /\bto\b/i.test(s.field || '')));
         const subjectStep = activeTask.steps.find(s => s.field?.includes('subject'));
         const resp = await fetch('http://127.0.0.1:5000/api/compose_email', {
           method: 'POST',
@@ -2775,9 +2778,9 @@ async function runStepQueue(tabId) {
   }
 
   // ── LIVE CODE EDITOR / LEETCODE INTELLIGENT SOLVER ─────────────────────────
-  const isEmailOrFormField = step.field && (
+  const isEmailOrFormField = step.field && !step.field.includes('code') && !step.field.includes('editor') && (
     step.field.includes('recipient') ||
-    step.field.includes('to') ||
+    /\bto\b/i.test(step.field) ||
     step.field.includes('subject') ||
     step.field.includes('body') ||
     step.field.includes('message') ||
@@ -2795,9 +2798,8 @@ async function runStepQueue(tabId) {
                          currentTabUrl.includes('x.com');
 
   const isCodeTypeStep = step.type === 'type' && !isEmailOrFormField && !isNonCodingSite && (
-    step.field?.includes('code editor') ||
+    step.field?.includes('code') ||
     step.field?.includes('editor') ||
-    (step.field === 'code') ||
     /^(?:write|type)\s+(?:c\+\+|cpp|python|java|javascript|js|c)?\s*(?:code|solution)\b/i.test(step.label || '') ||
     /^solve\s+/i.test(step.label || '')
   );
@@ -4122,7 +4124,7 @@ async function runStepQueue(tabId) {
     // If semantic recovery was attempted (tag_id: 0) and failed to find target
     if (hasFailures && actions.some(a => a.tag_id === 0)) {
       // Non-fatal resilience: If this was an email typing step (recipient/subject/body) or search/compose/prep click, advance to next step!
-      const isEmailStep = step.type === 'type' && (step.field?.toLowerCase().includes('subject') || step.field?.toLowerCase().includes('to') || step.field?.toLowerCase().includes('recipient') || step.field?.toLowerCase().includes('body') || step.field?.toLowerCase().includes('message'));
+      const isEmailStep = step.type === 'type' && !step.field?.includes('code') && !step.field?.includes('editor') && (step.field?.toLowerCase().includes('subject') || /\bto\b/i.test(step.field || '') || step.field?.toLowerCase().includes('recipient') || step.field?.toLowerCase().includes('body') || step.field?.toLowerCase().includes('message'));
       const isPrepClick = (step.type === 'click' || step.type === 'press_key') && (
         step.label?.toLowerCase().includes('search') ||
         (step.target || '').toLowerCase().includes('search') ||
@@ -4161,7 +4163,7 @@ async function runStepQueue(tabId) {
 
     if (isEmailTask && step.type === 'type' && (step.field?.includes('body') || step.field?.includes('email') || step.field?.includes('message'))) {
       try {
-        const recipientStep = activeTask.steps?.find(s => s.field?.includes('recipient') || s.field?.includes('to') || s.label?.toLowerCase().includes('recipient'));
+        const recipientStep = activeTask.steps?.find(s => !s.field?.includes('code') && !s.field?.includes('editor') && (s.field?.includes('recipient') || /\bto\b/i.test(s.field || '') || s.label?.toLowerCase().includes('recipient')));
         const subjectStep = activeTask.steps?.find(s => s.field?.includes('subject') || s.label?.toLowerCase().includes('subject'));
         const goalEmail = ((activeTask.goal || '').match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/) || [])[0] || '';
         const goalSubject = ((activeTask.goal || '').match(/subject\s+(?:is\s+|as\s+|to\s+|line\s+)?([^,;\n]+)/i) || [])[1]?.trim() || '';
@@ -4683,7 +4685,7 @@ function resolveStepToActions(step, elements) {
     (el.text || el.aria_label || el.placeholder || el.name || el.id || el.value || '').toLowerCase();
 
   if (step.type === 'type') {
-    const isEmailField = step.field.includes('recipient') || step.field.includes('to') || step.field.includes('subject') || step.field.includes('body') || step.field.includes('message');
+    const isEmailField = !step.field.includes('code') && !step.field.includes('editor') && (step.field.includes('recipient') || /\bto\b/i.test(step.field) || step.field.includes('subject') || step.field.includes('body') || step.field.includes('message'));
     const fieldWords = step.field.toLowerCase().split(/\s+/).filter(w => w.length > 1);
     const inputEls = elements.filter(isInputEl).filter(el => el.type !== 'radio' && el.type !== 'checkbox');
     let bestEl = null, bestScore = 0;
@@ -4697,13 +4699,13 @@ function resolveStepToActions(step, elements) {
       if (el.name?.includes('repo') || el.id?.includes('repo') || el.placeholder?.includes('repo')) score += 50;
       if (el.name?.includes('login') || el.id?.includes('login') || el.placeholder?.includes('login') || el.name?.includes('email')) score += 50;
       if (step.field.includes('subject') && (lbl.includes('subject') || el.name?.includes('subject') || el.placeholder?.toLowerCase().includes('subject'))) score += 120;
-      if (step.field.includes('recipient') && (lbl.includes('recipient') || lbl.includes('to') || el.aria_label?.toLowerCase().includes('to'))) score += 120;
+      if (step.field.includes('recipient') && (lbl.includes('recipient') || /\bto\b/i.test(lbl) || el.aria_label?.toLowerCase().includes('to'))) score += 120;
       if ((step.field.includes('body') || step.field.includes('message')) && (lbl.includes('body') || lbl.includes('message') || el.is_content_editable)) score += 150;
       if (score > bestScore) { bestScore = score; bestEl = el; }
     }
 
     const fieldLower = (step.field || '').toLowerCase();
-    const isSpecialField = fieldLower.includes('to') || fieldLower.includes('recipient') || fieldLower.includes('subject') || fieldLower.includes('body') || fieldLower.includes('message') ||
+    const isSpecialField = (!fieldLower.includes('code') && !fieldLower.includes('editor') && (/\bto\b/i.test(fieldLower) || fieldLower.includes('recipient') || fieldLower.includes('subject') || fieldLower.includes('body') || fieldLower.includes('message'))) ||
         fieldLower.includes('code') || fieldLower.includes('editor') || step.label?.toLowerCase().includes('solution') || step.label?.toLowerCase().includes('solve');
 
     if (isSpecialField && bestEl && bestScore >= 30) {
