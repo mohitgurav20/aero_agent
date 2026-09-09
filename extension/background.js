@@ -1644,6 +1644,13 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
           }
         }
 
+        // Prune submit_and_verify from standalone compiler plans (Programiz, etc.) where only Run exists
+        const hasProgramizInPlan = normalized.some(s => s.url?.includes('programiz.com') || (s.label || '').toLowerCase().includes('programiz'));
+        const hasLeetCodeInPlan = normalized.some(s => s.url?.includes('leetcode.com') || (s.label || '').toLowerCase().includes('leetcode'));
+        if (hasProgramizInPlan && !hasLeetCodeInPlan) {
+          normalized = normalized.filter(s => s.type !== 'submit_and_verify' && !(s.label || '').toLowerCase().includes('submit code and verify'));
+        }
+
         // Deduplicate multiple send steps: never keep more than one send step in a plan
         let seenSendInPlan = false;
         normalized = normalized.filter(s => {
@@ -2738,15 +2745,23 @@ async function runStepQueue(tabId) {
     const pageProblemMatch = currentTabUrl.match(/\/problems\/([^\/]+)/i);
     const pageProblemTitle = pageProblemMatch ? pageProblemMatch[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : '';
 
-    const rawTopic = step.label.replace(/^Write solution for /i, '').replace(/^Write code for /i, '').replace(/^Write python code for /i, '').replace(/^Write cpp code for /i, '').trim();
-    let derivedTopic = rawTopic;
+    let derivedTopic = (step.topic && !/^(?:code|solution|algorithm|problem|this\s*problem)$/i.test(step.topic.trim())) ? step.topic.trim() : '';
+    if (!derivedTopic) {
+      derivedTopic = (step.label || '')
+        .replace(/^Write\s+(?:c\+\+|cpp|python|java|javascript|js|c)?\s*(?:code|solution)\s+for\s+/i, '')
+        .replace(/^Write\s+(?:code|solution)\s+for\s+/i, '')
+        .trim();
+    }
     if (!derivedTopic || /^(?:code|solution|algorithm|problem|this\s*problem)$/i.test(derivedTopic)) {
       const g = (activeTask?.goal || '') + ' ' + (step.label || '');
       const mQuoted = g.match(/["'“”‘’]\s*([a-zA-Z0-9_\-\s]+?)\s*["'“”‘’]/i);
-      const mSolve = g.match(/(?:solve|slove|code|for|implement|search)\s+["'“”‘’]?\s*([a-zA-Z0-9_\-\s]+?)\s*["'“”‘’]?(?:\s+problem|\s+click|\s+and|\s*,|$)/i);
+      const mSolve = g.match(/(?:solve|slove|code|for|implement|search)\s+["'“”‘’]?\s*([a-zA-Z0-9_\-\s]+?)\s*["'“”‘’]?(?:\s+problem|\s+click|\s+and\s+run|\s*,|$)/i);
       const mProblem = g.match(/([a-zA-Z0-9_\-\s]+?)\s+problem/i);
       derivedTopic = (mQuoted ? mQuoted[1] : (mSolve ? mSolve[1] : (mProblem ? mProblem[1] : ''))).trim();
-      derivedTopic = derivedTopic.replace(/\b(?:problem|solve|slove|run|click|open|and|the|a|an)\b/gi, '').trim();
+      derivedTopic = derivedTopic
+        .replace(/^(?:solve|slove|code|for|implement|open|run)\s+/i, '')
+        .replace(/\s+(?:problem|and\s+run(?:\s+it)?|run(?:\s+it)?)$/i, '')
+        .trim();
     }
     
     // If the browser is currently viewing a specific LeetCode problem, ALWAYS use that problem!
@@ -2794,7 +2809,7 @@ async function runStepQueue(tabId) {
             template: isLeetCode ? ((liveEditor && liveEditor.template) || '') : '',
             problem_description: (liveEditor && liveEditor.description) || ''
           }),
-          signal: AbortSignal.timeout(25000)
+          signal: AbortSignal.timeout(65000)
         });
         if (resp.ok) {
           const json = await resp.json();
@@ -2825,7 +2840,7 @@ async function runStepQueue(tabId) {
             template: isLeetCode ? ((liveEditor && liveEditor.template) || '') : '',
             problem_description: (liveEditor && liveEditor.description) || ''
           }),
-          signal: AbortSignal.timeout(30000)
+          signal: AbortSignal.timeout(75000)
         });
         if (resp2.ok) {
           const json2 = await resp2.json();
@@ -2906,6 +2921,41 @@ async function runStepQueue(tabId) {
 
                 let didDispatch = false;
                 let cmView = null;
+
+                // Webpack 5 chunk hook for Programiz and similar platforms
+                if (window.webpackChunkprogramiz_oc) {
+                  try {
+                    let req = null;
+                    window.webpackChunkprogramiz_oc.push([
+                      [999999],
+                      {},
+                      (r) => { req = r; }
+                    ]);
+                    if (req) {
+                      try {
+                        const cmMod = req(6898);
+                        const ViewCls = cmMod?.Lz;
+                        if (ViewCls?.findFromDOM) {
+                          cmView = ViewCls.findFromDOM(document.getElementById('editor')) || ViewCls.findFromDOM(cmContent);
+                        }
+                      } catch(_) {}
+                      if (!cmView && req.c) {
+                        for (const id in req.c) {
+                          const exp = req.c[id]?.exports;
+                          if (!exp) continue;
+                          for (const val of Object.values(exp)) {
+                            if (val && typeof val.findFromDOM === 'function') {
+                              cmView = val.findFromDOM(document.getElementById('editor')) || val.findFromDOM(cmContent);
+                              if (cmView) break;
+                            }
+                          }
+                          if (cmView) break;
+                        }
+                      }
+                    }
+                  } catch(_) {}
+                }
+
                 let cur = cmContent;
                 while (cur && !cmView) {
                   if (cur.cmView?.view) cmView = cur.cmView.view;
@@ -2948,7 +2998,28 @@ async function runStepQueue(tabId) {
                   try { document.execCommand('delete', false, null); } catch(e) {}
                   try { document.execCommand('insertText', false, cleanCode); } catch(e) {}
 
-                  // If still not updated, directly set HTML lines
+                  // Try beforeinput event
+                  try {
+                    cmContent.dispatchEvent(new InputEvent('beforeinput', {
+                      inputType: 'insertReplacementText',
+                      data: cleanCode,
+                      bubbles: true,
+                      cancelable: true
+                    }));
+                  } catch(e) {}
+
+                  // Try paste event
+                  try {
+                    const dt = new DataTransfer();
+                    dt.setData('text/plain', cleanCode);
+                    cmContent.dispatchEvent(new ClipboardEvent('paste', {
+                      clipboardData: dt,
+                      bubbles: true,
+                      cancelable: true
+                    }));
+                  } catch(e) {}
+
+                  // Direct DOM fallback if needed
                   if (!cmContent.innerText.includes(cleanCode.slice(0, 20))) {
                     const lines = cleanCode.split('\n');
                     cmContent.innerHTML = lines.map(line => {
@@ -2963,8 +3034,14 @@ async function runStepQueue(tabId) {
                 cmContent.dispatchEvent(new Event('change', { bubbles: true }));
 
                 const currentText = (cmContent.innerText || '').trim();
-                const snippet = cleanCode.slice(0, 20).trim();
-                if (currentText.includes(snippet) || didDispatch || currentText.length > 30) {
+                const snippet = cleanCode.slice(0, 25).trim();
+                const hasDefaultStarter = currentText.includes('Start small. Ship something.') || currentText.includes('Write C++ code here');
+                const docStr = (cmView && cmView.state) ? cmView.state.doc.toString() : '';
+
+                if ((currentText.includes(snippet) || docStr.includes(snippet)) && !hasDefaultStarter) {
+                  return true;
+                }
+                if (didDispatch && docStr.includes(snippet)) {
                   return true;
                 }
                 return false;
@@ -3360,6 +3437,17 @@ async function runStepQueue(tabId) {
 
   // ── SUBMIT CODE AND VERIFY TESTCASES (LeetCode Autonomous Self-Healing Loop) ───
   if (step.type === 'submit_and_verify') {
+    const currentTabUrl = (currentTabObj?.url || '').toLowerCase();
+    if (currentTabUrl.includes('programiz.com') || (!currentTabUrl.includes('leetcode.com') && !activeTask.steps?.some(s => s.url?.includes('leetcode.com')))) {
+      console.log('[SQ] Skipping submit_and_verify on non-LeetCode compiler tab (task complete)');
+      step.status = 'done';
+      broadcastStepProgress();
+      broadcastStatus('acting', '✓ Compilation & Execution complete');
+      activeTask._isExecuting = false;
+      runStepQueue(targetTabId);
+      return;
+    }
+
     console.log('[SQ] Submitting solution and verifying testcases...');
     broadcastStatus('acting', 'Submitting solution to LeetCode...');
 

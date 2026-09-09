@@ -838,6 +838,16 @@
           document.execCommand('selectAll', false, null);
           document.execCommand('delete', false, null);
           injected = document.execCommand('insertText', false, text);
+
+          try {
+            targetCm.dispatchEvent(new InputEvent('beforeinput', {
+              inputType: 'insertReplacementText',
+              data: text,
+              bubbles: true,
+              cancelable: true
+            }));
+          } catch (_) {}
+
           if (!targetCm.innerText.includes(text.slice(0, 20))) {
             const lines = text.split('\n');
             targetCm.innerHTML = lines.map(line => {
@@ -856,6 +866,7 @@
           targetCm.dispatchEvent(pasteEvt);
         } catch (e) {}
       }
+      targetCm.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: text, inputType: 'insertText' }));
       targetCm.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
       targetCm.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
       await sleep(400);

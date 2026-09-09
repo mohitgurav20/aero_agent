@@ -898,6 +898,7 @@ def decompose_goal():
         "    - Default if language not specified: Python compiler.\n"
         "    - Writing code on compiler: {\"type\": \"type\", \"field\": \"code editor textarea\", \"topic\": \"<Clean Title>\", \"language\": \"c/cpp/python/java\", \"label\": \"Write <language> code for <Clean Title>\"}\n"
         "    - Running code: {\"type\": \"click\", \"target\": \"Run Compile Execute\", \"label\": \"Run code\"}\n"
+        "    - NOTE: Online compilers DO NOT have a submit button! NEVER add 'submit_and_verify' for Programiz or standalone compilers. Only add 'Run code'.\n"
         "11. Universal Login / Sign In on ANY Website (X/Twitter, LinkedIn, Reddit, Quora, LeetCode, etc.):\n"
         "    - Security & Human-In-The-Loop Rule:\n"
         "    - When user asks to login/sign in or access a site requiring account, NEVER guess passwords or output fake credentials.\n"
@@ -1029,8 +1030,13 @@ def decompose_goal():
                                 "topic": s.get("topic"),
                                 "language": s.get("language"),
                                 "direction": s.get("direction"),
-                                "label": lbl
                             })
+
+                    # Online compilers (Programiz) do not have submit/verification buttons; remove stray submit_and_verify
+                    has_prog = any("programiz.com" in (s.get("url") or "").lower() for s in valid_steps)
+                    has_leet = any("leetcode.com" in (s.get("url") or "").lower() for s in valid_steps)
+                    if has_prog and not has_leet:
+                        valid_steps = [s for s in valid_steps if s.get("type") != "submit_and_verify" and "submit" not in (s.get("label") or "").lower()]
 
                     # Human-In-The-Loop: When login/sign in is detected without explicit credentials in prompt,
                     # pause and wait for the user to sign in safely in the browser tab.
