@@ -1746,6 +1746,47 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
           }
         }
 
+        // Auto-complete and enforce write-before-run sequence for LeetCode plans
+        const leetNavStep = normalized.find(s => s.type === 'navigate' && s.url?.includes('leetcode.com'));
+        const hasLeetCode = leetNavStep || normalized.some(s => s.url?.includes('leetcode.com') || (s.label || '').toLowerCase().includes('leetcode'));
+        if (hasLeetCode) {
+          const firstRunOrSubmitIdx = normalized.findIndex(s =>
+            (s.type === 'click' && ((s.label || '').toLowerCase().includes('run') || (s.target || '').toLowerCase().includes('run'))) ||
+            s.type === 'submit_and_verify' ||
+            s.type === 'run_code'
+          );
+          const hasWriteStepBefore = normalized.some((s, idx) =>
+            idx < (firstRunOrSubmitIdx !== -1 ? firstRunOrSubmitIdx : normalized.length) &&
+            s.type === 'type' && (s.field?.includes('editor') || s.field?.includes('code') || (s.label || '').toLowerCase().includes('write'))
+          );
+
+          if (!hasWriteStepBefore && firstRunOrSubmitIdx !== -1) {
+            let problemTopic = '';
+            if (leetNavStep) {
+              const m = leetNavStep.url.match(/\/problems\/([^\/]+)/i);
+              if (m) problemTopic = m[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            }
+            if (!problemTopic) {
+              const mGoal = query.match(/(?:solve|slove|code|for)\s+([a-zA-Z0-9_\-\s]+?)(?:\s+on\s+leetcode|\s+problem|\s+and\s+email|\s*,|$)/i);
+              if (mGoal) problemTopic = mGoal[1].trim();
+            }
+            problemTopic = problemTopic || 'Algorithm';
+            const detectedLang = detectLanguageFromText(query) || 'cpp';
+
+            const writeStep = {
+              id: normalized.length,
+              type: 'type',
+              field: 'code editor textarea',
+              topic: problemTopic,
+              language: detectedLang,
+              label: `Write ${detectedLang.toUpperCase()} code for ${problemTopic}`,
+              status: 'pending'
+            };
+            normalized.splice(firstRunOrSubmitIdx, 0, writeStep);
+            console.log(`[SQ] Injected missing write code step before Run/Submit for ${problemTopic}`);
+          }
+        }
+
         // Deduplicate consecutive run steps
         normalized = normalized.filter((s, idx) => {
           if (idx > 0) {
@@ -2636,12 +2677,31 @@ async function runStepQueue(tabId) {
   }
 
   // ── LIVE CODE EDITOR / LEETCODE INTELLIGENT SOLVER ─────────────────────────
-  const isCodeTypeStep = step.type === 'type' && (
+  const isEmailOrFormField = step.field && (
+    step.field.includes('recipient') ||
+    step.field.includes('to') ||
+    step.field.includes('subject') ||
+    step.field.includes('body') ||
+    step.field.includes('message') ||
+    step.field.includes('search') ||
+    step.field.includes('username') ||
+    step.field.includes('password')
+  );
+  const isNonCodingSite = currentTabUrl.includes('mail.google.com') ||
+                         currentTabUrl.includes('whatsapp.com') ||
+                         currentTabUrl.includes('youtube.com') ||
+                         currentTabUrl.includes('google.com') ||
+                         currentTabUrl.includes('reddit.com') ||
+                         currentTabUrl.includes('amazon.com') ||
+                         currentTabUrl.includes('twitter.com') ||
+                         currentTabUrl.includes('x.com');
+
+  const isCodeTypeStep = step.type === 'type' && !isEmailOrFormField && !isNonCodingSite && (
+    step.field?.includes('code editor') ||
     step.field?.includes('editor') ||
-    step.field?.includes('code') ||
-    step.label?.toLowerCase().includes('write solution') ||
-    step.label?.toLowerCase().includes('write code') ||
-    step.label?.toLowerCase().includes('solve')
+    (step.field === 'code') ||
+    /^(?:write|type)\s+(?:c\+\+|cpp|python|java|javascript|js|c)?\s*(?:code|solution)\b/i.test(step.label || '') ||
+    /^solve\s+/i.test(step.label || '')
   );
 
   if (isCodeTypeStep) {
@@ -3202,7 +3262,8 @@ async function runStepQueue(tabId) {
               const model = targetEd.getModel();
               const rawLang = model ? model.getLanguageId() : null;
               const finalLang = (rawLang && rawLang !== 'plaintext') ? rawLang : 'cpp';
-              const isBlank = !val || val.trim().length < 30 || (!val.includes('Solution') && !val.includes('class') && !val.includes('def ') && !val.includes('function'));
+              const hasEmptyBody = /\{\s*(?:\/\/.*?\s*)?\}/.test(val) || /:\s*(?:pass|\.\.\.)\s*$/.test(val.trim());
+              const isBlank = !val || val.trim().length < 30 || (!val.includes('Solution') && !val.includes('class') && !val.includes('def ') && !val.includes('function')) || hasEmptyBody;
               const descEl = document.querySelector('div[data-track-load="description_content"], [data-key="description-content"], .elfjS, .x9_s, #qd-content, div[class*="description"]');
               const problemDescription = descEl ? (descEl.innerText || '').slice(0, 3000) : '';
               return { type: 'monaco', isBlank, value: val, language: finalLang, description: problemDescription };
@@ -3223,16 +3284,25 @@ async function runStepQueue(tabId) {
       console.warn('[SQ] Pre-run editor inspection error:', e.message);
     }
 
-    // 2. BRAIN & CODE SYNTHESIS: If editor is blank or lacks solution class, synthesize and inject FIRST!
-    if (editorInspection && editorInspection.isBlank) {
+    // 2. BRAIN & CODE SYNTHESIS: If editor is blank, has empty body, or lacks synthesized solution, synthesize and inject FIRST!
+    const editorVal = editorInspection?.value || '';
+    const currentTabUrl = (currentTabObj?.url || '').toLowerCase();
+    const hasUnsolvedLeetCode = currentTabUrl.includes('leetcode.com') && (
+      !activeTask.lastSolvedCode ||
+      !editorVal.includes(activeTask.lastSolvedCode.slice(0, 30)) ||
+      /\{\s*(?:\/\/.*?\s*)?\}/.test(editorVal) ||
+      /:\s*(?:pass|\.\.\.)\s*$/.test(editorVal.trim())
+    );
+    const needsCodeSynthesis = (editorInspection && editorInspection.isBlank) || hasUnsolvedLeetCode;
+
+    if (needsCodeSynthesis) {
       console.warn('[SQ] Editor is empty or lacks solution! Synthesizing solution before running...');
-      const currentTabUrl = (currentTabObj?.url || '').toLowerCase();
       const pageProblemMatch = currentTabUrl.match(/\/problems\/([^\/]+)/i);
       const pageProblemTitle = pageProblemMatch ? pageProblemMatch[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : '';
       const topic = pageProblemTitle || step.topic || (activeTask.goal ? activeTask.goal.replace(/^(?:run|solve|slove|open)\s+/i, '').trim() : '') || 'Algorithm';
-      const lang = editorInspection.language || activeTask.lastSolvedLang || 'cpp';
+      const lang = editorInspection?.language || activeTask.lastSolvedLang || 'cpp';
 
-      broadcastStatus('thinking', `Editor is empty. Synthesizing ${lang.toUpperCase()} solution for ${topic} before running...`);
+      broadcastStatus('thinking', `Synthesizing ${lang.toUpperCase()} solution for ${topic} before running...`);
 
       let generatedCode = activeTask.lastSolvedCode;
       if (!generatedCode || generatedCode.length < 30) {

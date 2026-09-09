@@ -1315,7 +1315,7 @@
       }
     }
 
-    if (rawTarget.includes('code') || rawTarget.includes('editor') || rawTarget.includes('solution') || rawTarget.includes('solve')) {
+    if ((rawTarget.includes('code') || rawTarget.includes('editor') || rawTarget.includes('solution') || /\bsolve\b/i.test(rawTarget)) && !rawTarget.includes('subject') && !rawTarget.includes('recipient') && !rawTarget.includes('to recipients') && !rawTarget.includes('message body')) {
       const codeEditor = document.querySelector('.monaco-editor, .monaco-editor textarea, .ace_editor, .ace_text-input, textarea.ace_text-input, .ace_content, div[role="textbox"], textarea');
       if (codeEditor) return codeEditor;
     }
