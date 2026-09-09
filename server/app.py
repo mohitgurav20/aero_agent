@@ -702,6 +702,7 @@ def generate_code():
                 raw = re.sub(r"^```[a-zA-Z0-9_\-\+]*\s*", "", raw)
                 raw = re.sub(r"```[\s\S]*$", "", raw).strip()
             raw = raw.replace("`", "").strip()
+            raw = re.sub(r"^(?:javascript|python|cpp|java|script|c\+\+|c)\s*\n", "", raw, flags=re.IGNORECASE).strip()
             if raw and len(raw) > 40:
                 code = raw
                 break
