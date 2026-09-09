@@ -361,60 +361,22 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Helper: Reliably deliver floating summary modal to the active browser tab
   // ── DELIVER FLOATING SUMMARY CARD TO WEBPAGE TAB ─────────────────────────
+  // Only injects into the currently active tab. Never switches tabs or navigates.
   async function deliverFloatingSummaryToPage(title, markdown) {
     const isInternalUrl = (url) => !url || url.startsWith('chrome://') || url.startsWith('edge://') || url.startsWith('about:') || url.startsWith('chrome-extension://');
 
-    let targetTab = null;
-
-    // 1. Check current active tab
+    // Use current active tab only — never switch or navigate to another tab
     const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
-    const candidate = activeTabs?.[0];
+    const targetTab = activeTabs?.[0];
 
-    if (candidate && !isInternalUrl(candidate.url)) {
-      targetTab = candidate;
-    } else {
-      // 2. Check if any other open tab in current window is an ordinary web page
-      const allTabs = await chrome.tabs.query({ currentWindow: true }).catch(() => []);
-      const webTab = allTabs.find(t => t.url && !isInternalUrl(t.url));
-      if (webTab) {
-        targetTab = webTab;
-        try {
-          await chrome.tabs.update(webTab.id, { active: true });
-        } catch (e) {}
-      } else if (candidate && candidate.id) {
-        // 3. Current tab is chrome://newtab or internal, and NO web tabs exist!
-        // Chrome strictly prohibits content scripts on chrome:// pages.
-        // Seamlessly navigate to https://www.google.com so the floating pop-up card can display!
-        try {
-          await chrome.tabs.update(candidate.id, { url: 'https://www.google.com' });
-          targetTab = candidate;
-          // Wait for tab navigation to complete
-          await new Promise(resolve => {
-            const timeout = setTimeout(resolve, 2500);
-            const listener = (tabId, changeInfo) => {
-              if (tabId === candidate.id && changeInfo.status === 'complete') {
-                chrome.tabs.onUpdated.removeListener(listener);
-                clearTimeout(timeout);
-                resolve();
-              }
-            };
-            chrome.tabs.onUpdated.addListener(listener);
-          });
-          await new Promise(r => setTimeout(r, 200));
-        } catch (err) {
-          console.error('[Popup] Could not navigate internal tab:', err);
-        }
-      }
-    }
-
-    if (!targetTab || !targetTab.id) {
-      console.warn('[Popup] No inspectable web page available to show floating summary.');
+    if (!targetTab || !targetTab.id || isInternalUrl(targetTab.url)) {
+      // Active tab is chrome://newtab or restricted — cannot inject
+      console.warn('[Popup] Active tab is restricted (chrome://*), floating card cannot be injected.');
       return false;
     }
 
-    // Step 1: Ensure content script is injected on target tab
+    // Ensure content script is injected on target tab
     try {
       await chrome.scripting.executeScript({
         target: { tabId: targetTab.id },
@@ -424,7 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     await new Promise(r => setTimeout(r, 120));
 
-    // Step 2: Send message to content script to pop up card
+    // Send message to content script to show floating card
     let delivered = false;
     try {
       const resp = await chrome.tabs.sendMessage(targetTab.id, {
@@ -437,7 +399,7 @@ document.addEventListener('DOMContentLoaded', () => {
       console.warn('[Popup] sendMessage to content script failed:', err);
     }
 
-    // Step 3: Direct programmatic execution fallback if message was missed
+    // Direct script execution fallback
     if (!delivered) {
       try {
         await chrome.scripting.executeScript({
@@ -458,6 +420,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     return delivered;
   }
+
 
   // ── EXECUTABLE SUMMARIZATION WORKFLOW ──────────────────────────────────────
   async function executeSummarizationWorkflow(userGoal = '') {
