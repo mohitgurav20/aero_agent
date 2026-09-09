@@ -879,8 +879,8 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
     steps.push({ type: 'navigate', url: 'https://github.com/new', label: 'Go to GitHub New Repository page' });
 
     // Multi-word and alphanumeric name extraction (e.g. "Naruto 1", "my-app", "cool project")
-    const nameMatch = q.match(/(?:repo\s+name|repository\s+name|name\s+it|named|call\s+it|called|\bname)\s+([^,]+?)(?=\s+(?:and\s+choose|and\s+set|and\s+make|and\s+create|and\s+select|choose|visibility|with|private|public|and\b|$))/i)
-                   || q.match(/(?:create\s+(?:a\s+)?(?:new\s+)?(?:repo|repository)\s+(?:called\s+|named\s+)?)([^,]+?)(?=\s+(?:and\s+choose|and\s+set|and\s+make|and\s+create|and\s+select|choose|visibility|with|private|public|and\b|$))/i)
+    const nameMatch = q.match(/(?:repo\s+name|repository\s+name|name\s+it|named|call\s+it|called|\bname)\s+([^,]+?)(?=\s+(?:and\s+choose|and\s+set|and\s+make|and\s+create|and\s+select|choose|visibility|with|private|public|description|discreption|desc|add\s+readme|and\b|$))/i)
+                   || q.match(/(?:create\s+(?:a\s+)?(?:new\s+)?(?:repo|repository)\s+(?:called\s+|named\s+)?)([^,]+?)(?=\s+(?:and\s+choose|and\s+set|and\s+make|and\s+create|and\s+select|choose|visibility|with|private|public|description|discreption|desc|add\s+readme|and\b|$))/i)
                    || q.match(/(?:repo\s+name|name)\s+([a-zA-Z0-9_\-\.\s]+)/i);
 
     let repoName = nameMatch ? nameMatch[1].trim() : null;
@@ -893,13 +893,26 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
       steps.push({ type: 'type', field: 'repository name', value: formattedRepoName, label: `Set repo name to "${formattedRepoName}"` });
     }
 
-    if (/\bprivate\b/i.test(q)) {
-      steps.push({ type: 'select', field: 'visibility', value: 'private', label: 'Set repository to private' });
-    } else if (/\bpublic\b/i.test(q)) {
-      steps.push({ type: 'select', field: 'visibility', value: 'public', label: 'Set repository to public' });
+    // Description extraction (supports typos like 'discreption', 'desc', 'description')
+    const descMatch = q.match(/(?:description|discreption|desc)\s+(?:is\s+)?([^,]+?)(?=\s*(?:,|\band\b|add\s+readme|create|$))/i);
+    if (descMatch) {
+      const descVal = descMatch[1].trim();
+      if (descVal) {
+        steps.push({ type: 'type', field: 'Description', value: descVal, label: `Type repository description "${descVal}"` });
+      }
     }
 
-    steps.push({ type: 'click', target: 'Create repository', label: 'Submit — Create repository' });
+    if (/\bprivate\b/i.test(q)) {
+      steps.push({ type: 'click', target: 'Private', label: 'Select Private visibility' });
+    } else if (/\bpublic\b/i.test(q)) {
+      steps.push({ type: 'click', target: 'Public', label: 'Select Public visibility' });
+    }
+
+    if (/\b(?:readme|add\s+readme)\b/i.test(q)) {
+      steps.push({ type: 'click', target: 'Add a README file', label: 'Check Add a README file' });
+    }
+
+    steps.push({ type: 'click', target: 'Create repository', label: 'Click Create repository' });
     return { steps, context };
   }
 
@@ -1720,6 +1733,43 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
             }
           }
           normalized = transformed.map((s, idx) => ({ ...s, id: idx, status: 'pending' }));
+        }
+
+        // Auto-fix GitHub repository creation steps:
+        const isGithubRepoPlan = normalized.some(s => s.url?.includes('github.com/new') || (s.label || '').toLowerCase().includes('new repository') || (s.label || '').toLowerCase().includes('create repo'));
+        if (isGithubRepoPlan) {
+          // 1. Remove redundant home page navigations (never open github.com when creating a repo)
+          normalized = normalized.filter(s => !(s.type === 'navigate' && s.url && (s.url === 'https://github.com' || s.url === 'https://github.com/')));
+
+          // 2. If query specifies description ('description', 'discreption', 'desc') but plan missed it, inject it
+          const descMatch = query.match(/(?:description|discreption|desc)\s+(?:is\s+)?([^,]+?)(?=\s*(?:,|\band\b|add\s+readme|create|$))/i);
+          const hasDescStep = normalized.some(s => s.type === 'type' && (s.field?.toLowerCase().includes('desc') || (s.label || '').toLowerCase().includes('description')));
+          if (descMatch && !hasDescStep) {
+            const descText = descMatch[1].trim();
+            const nameIdx = normalized.findIndex(s => s.type === 'type' && (s.field?.toLowerCase().includes('name') || (s.label || '').toLowerCase().includes('repository name')));
+            const insertIdx = nameIdx !== -1 ? nameIdx + 1 : 1;
+            normalized.splice(insertIdx, 0, {
+              id: normalized.length,
+              type: 'type',
+              field: 'Description',
+              value: descText,
+              label: `Type repository description '${descText}'`,
+              status: 'pending'
+            });
+            console.log(`[SQ] Injected missing repository description step: "${descText}"`);
+          }
+
+          // 3. Remove stray visibility steps if user did NOT explicitly request private or public
+          const userWantsVisibility = /\b(?:private|public)\b/i.test(query);
+          if (!userWantsVisibility) {
+            normalized = normalized.filter(s => {
+              const lbl = (s.label || '').toLowerCase();
+              const tgt = (s.target || '').toLowerCase();
+              const fld = (s.field || '').toLowerCase();
+              const isVis = lbl.includes('visibility') || tgt.includes('private') || tgt.includes('public') || fld.includes('visibility');
+              return !isVis;
+            });
+          }
         }
 
         // Auto-complete Programiz compile stage if user requested it and LLM generated the navigate step

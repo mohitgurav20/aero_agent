@@ -887,9 +887,10 @@ def decompose_goal():
         "     7. Type message body with solution into 'message body'.\n"
         "     8. Click send: {\"type\": \"click\", \"target\": \"Send\", \"label\": \"Send email\"}\n"
         "3. GitHub:\n"
-        "   - Create new repository: navigate to https://github.com/new\n"
+        "   - Create new repository: navigate directly to https://github.com/new (NEVER navigate to https://github.com home page when creating a repo!)\n"
         "   - Repository name: {\"type\": \"type\", \"field\": \"Repository name\", \"value\": \"<repo_name>\", \"label\": \"Type repository name '<repo_name>'\"}\n"
-        "   - Private repository: if requested, click private: {\"type\": \"click\", \"target\": \"Private\", \"label\": \"Select Private visibility\"}\n"
+        "   - Repository description: if specified/requested (including phonetic typos like 'discreption', 'desc', 'details'): {\"type\": \"type\", \"field\": \"Description\", \"value\": \"<description>\", \"label\": \"Type repository description '<description>'\"}\n"
+        "   - Visibility: ONLY IF the user explicitly asked for 'private' or 'public'. NEVER add a visibility step if neither private nor public was explicitly requested!\n"
         "   - Add README: if requested, click checkbox: {\"type\": \"click\", \"target\": \"Add a README file\", \"label\": \"Check Add a README file\"}\n"
         "   - Create button: {\"type\": \"click\", \"target\": \"Create repository\", \"label\": \"Click Create repository\"}\n"
         "   - Search repos: navigate to https://github.com/search?q=<query>&type=repositories\n"
@@ -917,12 +918,12 @@ def decompose_goal():
         '      * {"type": "wait_for_user", "label": "Please sign in to your account, then click Continue"}\n'
         "12. X (Twitter): https://x.com/ or https://x.com/login for login, https://x.com/search?q=<query> for search\n\n"
         "Examples:\n"
-        'Goal: "open github , create new repo , repo name photon , private , add readme file , create it"\n'
+        'Goal: "open github create new repo , repo name walnut , discreption walnuts have more fat , add readme file , create it"\n'
         "JSON:\n"
         "[\n"
         '  {"type": "navigate", "url": "https://github.com/new", "label": "Open GitHub new repository page"},\n'
-        '  {"type": "type", "field": "Repository name", "value": "photon", "label": "Type repository name \'photon\'"},\n'
-        '  {"type": "click", "target": "Private", "label": "Select Private visibility"},\n'
+        '  {"type": "type", "field": "Repository name", "value": "walnut", "label": "Type repository name \'walnut\'"},\n'
+        '  {"type": "type", "field": "Description", "value": "walnuts have more fat", "label": "Type repository description \'walnuts have more fat\'"},\n'
         '  {"type": "click", "target": "Add a README file", "label": "Check Add a README file"},\n'
         '  {"type": "click", "target": "Create repository", "label": "Click Create repository"}\n'
         "]\n\n"

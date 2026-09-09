@@ -1388,7 +1388,47 @@
       }
     }
 
-    if (rawTarget.includes('repo') || rawTarget.includes('repository')) {
+    // ── Dedicated GitHub New Repository Elements ──────────────────────────────
+    if (rawTarget.includes('create repository') || rawTarget.includes('create repo') || (rawTarget.includes('create') && window.location.pathname.includes('/new'))) {
+      const createBtn = document.querySelector('button[type="submit"].btn-primary, button[type="submit"]:has(span), form.new_repository button[type="submit"], button[data-disable-with*="Creating" i]')
+        || Array.from(document.querySelectorAll('button[type="submit"], button')).find(btn => {
+          const t = (btn.textContent || btn.innerText || '').trim().toLowerCase();
+          return t === 'create repository' || t.startsWith('create repository') || t.includes('create repository');
+        });
+      if (createBtn) {
+        console.log('[Content] Matched Create repository submit button:', createBtn);
+        return createBtn;
+      }
+    }
+
+    if (rawTarget.includes('description') || rawTarget.includes('discreption') || rawTarget.includes('desc')) {
+      const descInput = document.querySelector(
+        '#repository_description, input[name="repository[description]"], input[aria-label*="description" i], textarea[name="repository[description]"], textarea[aria-label*="description" i], input[placeholder*="description" i], textarea[placeholder*="description" i], [data-testid="repository-description-input"]'
+      ) || Array.from(document.querySelectorAll('input, textarea')).find(el => {
+        const id = (el.id || el.name || el.placeholder || el.getAttribute('aria-label') || '').toLowerCase();
+        return id.includes('description') || id.includes('desc');
+      });
+      if (descInput) {
+        console.log('[Content] Matched description input via direct selector:', descInput);
+        return descInput;
+      }
+    }
+
+    if (rawTarget.includes('readme')) {
+      const readmeEl = document.querySelector(
+        '#repository_auto_init, input[name="repository[auto_init]"], input[id*="readme" i], [aria-label*="readme" i], input[type="checkbox"][id*="init"]'
+      ) || Array.from(document.querySelectorAll('input[type="checkbox"], button, [role="switch"], label')).find(el => {
+        const text = (el.textContent || el.getAttribute('aria-label') || el.id || el.name || '').toLowerCase();
+        const parentText = (el.closest('div, label, section')?.textContent || '').toLowerCase();
+        return text.includes('readme') || parentText.includes('add a readme');
+      });
+      if (readmeEl) {
+        console.log('[Content] Matched README toggle/checkbox:', readmeEl);
+        return readmeEl;
+      }
+    }
+
+    if ((rawTarget.includes('repo name') || rawTarget.includes('repository name') || (step.action === 'type' && (rawTarget.includes('repo') || rawTarget.includes('repository')))) && !rawTarget.includes('create')) {
       const repoInput = document.querySelector(
         '#repository_name, input[name="repository[name]"], input[data-testid="repository-name-input"], input[aria-label*="Repository name" i], input[aria-describedby*="RepoName"], input[id*="repository_name"]'
       ) || Array.from(document.querySelectorAll('input[type="text"], input:not([type])')).find(el => {
