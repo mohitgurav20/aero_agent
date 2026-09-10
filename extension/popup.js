@@ -67,6 +67,15 @@ document.addEventListener('DOMContentLoaded', () => {
   const hitlContinueBtn = document.getElementById('hitl-continue-btn');
   const hitlBannerDesc = document.getElementById('hitl-banner-desc');
 
+  // Executive Summary Pop-Up Modal Elements
+  const summaryModal = document.getElementById('summary-modal');
+  const summaryModalTitle = document.getElementById('summary-modal-title');
+  const summaryModalBody = document.getElementById('summary-modal-body');
+  const summaryModalCloseBtn = document.getElementById('summary-modal-close-btn');
+  const summaryModalXBtn = document.getElementById('summary-modal-x-btn');
+  const summaryModalCopyBtn = document.getElementById('summary-modal-copy-btn');
+  const summaryPopupPageBtn = document.getElementById('summary-popup-page-btn');
+
   // State
   let currentClarification = null;
   let isRecording = false;
@@ -82,6 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let voiceReplyEnabled = true;
   let attachedDocument = null; // { name, size, type, base64, extractedText }
   let currentSummaryMarkdown = '';
+  let currentSummaryTitle = 'Executive Summary';
 
   // Load saved voice toggle state
   chrome.storage.local.get(['voice_reply_enabled'], (res) => {
@@ -361,32 +371,101 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // ── RENDER MARKDOWN TO RICH HTML FOR IN-PANEL SUMMARY MODAL ─────────────
+  function renderMarkdownSummary(md) {
+    if (!md) return '<p style="color:#64748b; font-style:italic;">No summary text generated.</p>';
+
+    // 1. Format Markdown Tables
+    let text = md.replace(/((?:\|[^\n]+\|\r?\n)+)/g, (match) => {
+      const rows = match.trim().split(/\r?\n/).map(r => r.trim()).filter(Boolean);
+      if (rows.length < 2) return match;
+      let html = '<div style="overflow-x:auto; margin:10px 0; border:1px solid #e2e8f0; border-radius:8px;"><table style="width:100%; border-collapse:collapse; font-size:11px;">';
+      let hasHeader = false;
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (/^\|[-:\s|]+\|$/.test(row)) { hasHeader = true; continue; }
+        const cells = row.split('|').slice(1, -1).map(c => c.trim());
+        if (i === 0 || (!hasHeader && i === 0)) {
+          html += '<thead><tr style="background:#f1f5f9; border-bottom:1.5px solid #cbd5e1;">';
+          cells.forEach(c => html += `<th style="padding:6px 8px; text-align:left; font-weight:700; color:#0f172a;">${escapeHtml(c)}</th>`);
+          html += '</tr></thead><tbody>';
+        } else {
+          const bg = i % 2 === 0 ? '#ffffff' : '#f8fafc';
+          html += `<tr style="background:${bg}; border-bottom:1px solid #f1f5f9;">`;
+          cells.forEach(c => html += `<td style="padding:5px 8px; color:#334155;">${escapeHtml(c)}</td>`);
+          html += '</tr>';
+        }
+      }
+      if (hasHeader) html += '</tbody>';
+      html += '</table></div>';
+      return html;
+    });
+
+    // 2. Headings, bullet points, blockquotes, code
+    return text
+      .replace(/^#### (.*$)/gim, '<h5 style="font-size:11.5px; font-weight:700; color:#475569; margin:10px 0 3px 0; text-transform:uppercase;">$1</h5>')
+      .replace(/^### (.*$)/gim, '<h4 style="font-size:12.5px; font-weight:700; color:#0f172a; margin:12px 0 4px 0; border-bottom:1px solid #f1f5f9; padding-bottom:3px;">$1</h4>')
+      .replace(/^## (.*$)/gim, '<h3 style="font-size:13.5px; font-weight:700; color:#0f172a; margin:14px 0 5px 0;">$1</h3>')
+      .replace(/^# (.*$)/gim, '<h2 style="font-size:15px; font-weight:800; color:#0f172a; margin:16px 0 6px 0;">$1</h2>')
+      .replace(/\*\*(.*?)\*\*/gim, '<strong style="color:#0f172a;">$1</strong>')
+      .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+      .replace(/`([^`]+)`/gim, '<code style="background:#f1f5f9; padding:2px 4px; border-radius:4px; font-size:11px; font-family:monospace; color:#e11d48;">$1</code>')
+      .replace(/^> (.*$)/gim, '<blockquote style="border-left:3px solid #f43f5e; margin:6px 0; padding:4px 10px; background:#fff1f2; border-radius:0 4px 4px 0; color:#881337; font-size:11.5px;">$1</blockquote>')
+      .replace(/^- (.*$)/gim, '<li style="margin-left:14px; margin-bottom:3px; font-size:11.5px; line-height:1.45; color:#334155;">$1</li>')
+      .replace(/^\d+\.\s+(.*$)/gim, '<li style="margin-left:14px; margin-bottom:3px; font-size:11.5px; line-height:1.45; color:#334155;">$1</li>')
+      .replace(/\n\n/gim, '<br>');
+  }
+
+  // ── SHOW / HIDE IN-PANEL SUMMARY MODAL ──────────────────────────────────
+  function showSummaryModal(title, md) {
+    if (!summaryModal) return;
+    currentSummaryTitle = title || 'Executive Summary';
+    currentSummaryMarkdown = md || '';
+    if (summaryModalTitle) summaryModalTitle.textContent = currentSummaryTitle;
+    if (summaryModalBody) summaryModalBody.innerHTML = renderMarkdownSummary(currentSummaryMarkdown);
+    summaryModal.classList.remove('hidden');
+  }
+
+  function hideSummaryModal() {
+    if (!summaryModal) return;
+    summaryModal.classList.add('hidden');
+  }
+
+  if (summaryModalCloseBtn) summaryModalCloseBtn.addEventListener('click', hideSummaryModal);
+  if (summaryModalXBtn) summaryModalXBtn.addEventListener('click', hideSummaryModal);
+  if (summaryModalCopyBtn) {
+    summaryModalCopyBtn.addEventListener('click', async () => {
+      if (!currentSummaryMarkdown) return;
+      try {
+        await navigator.clipboard.writeText(currentSummaryMarkdown);
+        summaryModalCopyBtn.textContent = '✓ Copied!';
+        summaryModalCopyBtn.style.color = '#059669';
+        setTimeout(() => {
+          summaryModalCopyBtn.textContent = '📋 Copy';
+          summaryModalCopyBtn.style.color = '';
+        }, 1800);
+      } catch (e) {}
+    });
+  }
+  if (summaryPopupPageBtn) {
+    summaryPopupPageBtn.addEventListener('click', () => {
+      deliverFloatingSummaryToPage(currentSummaryTitle || 'Executive Summary', currentSummaryMarkdown);
+    });
+  }
+
   // ── DELIVER FLOATING SUMMARY CARD TO WEBPAGE TAB ─────────────────────────
-  // Only injects into the currently active tab. Never switches tabs or navigates.
   async function deliverFloatingSummaryToPage(title, markdown) {
     const isInternalUrl = (url) => !url || url.startsWith('chrome://') || url.startsWith('edge://') || url.startsWith('about:') || url.startsWith('chrome-extension://');
 
-    // Use current active tab only — never switch or navigate to another tab
     const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
     const targetTab = activeTabs?.[0];
 
     if (!targetTab || !targetTab.id || isInternalUrl(targetTab.url)) {
-      // Active tab is chrome://newtab or restricted — cannot inject
       console.log('[Popup] Active tab is restricted (chrome://*), floating card cannot be injected.');
       return false;
     }
 
-    // Ensure content script is injected on target tab
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: targetTab.id },
-        files: ['content.js']
-      }).catch(() => {});
-    } catch (e) {}
-
-    await new Promise(r => setTimeout(r, 120));
-
-    // Send message to content script to show floating card
+    // Try sending message to content script first
     let delivered = false;
     try {
       const resp = await chrome.tabs.sendMessage(targetTab.id, {
@@ -396,10 +475,10 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       if (resp && resp.success) delivered = true;
     } catch (err) {
-      console.warn('[Popup] sendMessage to content script failed:', err);
+      console.warn('[Popup] sendMessage to content script failed, falling back to direct executeScript:', err);
     }
 
-    // Direct script execution fallback
+    // Direct script execution fallback with robust DOM injector
     if (!delivered) {
       try {
         await chrome.scripting.executeScript({
@@ -409,7 +488,24 @@ document.addEventListener('DOMContentLoaded', () => {
               window.showFloatingSummaryCard(t, md);
               return true;
             }
-            return false;
+            const prev = document.getElementById('aero-floating-summary-card');
+            if (prev) prev.remove();
+            const el = document.createElement('div');
+            el.id = 'aero-floating-summary-card';
+            el.style.cssText = 'position:fixed; top:20px; right:20px; width:540px; max-width:90vw; max-height:86vh; background:#ffffff; border:1.5px solid #f43f5e; border-radius:16px; box-shadow:0 25px 60px rgba(0,0,0,0.35); z-index:2147483647; display:flex; flex-direction:column; overflow:hidden; font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;';
+            el.innerHTML = `
+              <div style="padding:12px 16px; border-bottom:1px solid #f1f5f9; display:flex; align-items:center; justify-content:space-between; background:#fff1f2;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <span style="font-size:18px;">📑</span>
+                  <strong style="font-size:13px; color:#0f172a;">${t || 'Executive Summary'}</strong>
+                </div>
+                <button id="aero-float-close-btn" style="background:#fff; border:1px solid #cbd5e1; border-radius:50%; width:28px; height:28px; cursor:pointer; font-weight:700;">✕</button>
+              </div>
+              <div style="padding:16px; overflow-y:auto; font-size:12.5px; line-height:1.6; color:#334155; white-space:pre-wrap;">${md}</div>
+            `;
+            document.body.appendChild(el);
+            el.querySelector('#aero-float-close-btn').onclick = () => el.remove();
+            return true;
           },
           args: [title, markdown]
         });
@@ -421,14 +517,13 @@ document.addEventListener('DOMContentLoaded', () => {
     return delivered;
   }
 
-
   // ── EXECUTABLE SUMMARIZATION WORKFLOW ──────────────────────────────────────
   async function executeSummarizationWorkflow(userGoal = '') {
     const isDoc = !!(attachedDocument && (attachedDocument.extractedText || attachedDocument.name));
     const title = isDoc ? `Summary: ${attachedDocument.name}` : 'Web Page Summary';
 
     updateStatus('thinking', 'Scraping and synthesizing with local LLM...');
-    reasoningBox.innerHTML = `<strong>Synthesizing Summary:</strong> Scraping ${escapeHtml(isDoc ? attachedDocument.name : 'active page')} with local LLM for knowledge drawer & floating pop-up...`;
+    reasoningBox.innerHTML = `<strong>Synthesizing Summary:</strong> Scraping ${escapeHtml(isDoc ? attachedDocument.name : 'active page')} with local LLM for knowledge pop-up...`;
     speakAgentMessage('Summarizing content with local intelligence');
 
     try {
@@ -439,18 +534,49 @@ document.addEventListener('DOMContentLoaded', () => {
         sourceContent = attachedDocument.extractedText;
         sourceTitle = attachedDocument.name;
       } else {
-        // Query active tab and scrape clean content via content script
+        // Query active tab in current window
         const tabs = await new Promise(resolve => {
-          chrome.tabs.query({ active: true, lastFocusedWindow: true }, resolve);
+          chrome.tabs.query({ active: true, currentWindow: true }, resolve);
         });
         const activeTab = tabs?.[0];
         sourceTitle = activeTab?.title || 'Active Webpage';
 
-        // Check if current tab is a restricted chrome:// page
         const tabUrl = activeTab?.url || '';
         const isRestrictedTab = !tabUrl || tabUrl.startsWith('chrome://') || tabUrl.startsWith('edge://') || tabUrl.startsWith('about:') || tabUrl.startsWith('chrome-extension://');
 
         if (isRestrictedTab) {
+          // If active tab is restricted, check if user has other readable webpage tabs in the window
+          const allTabs = await new Promise(resolve => {
+            chrome.tabs.query({ currentWindow: true }, resolve);
+          });
+          const readableTabs = (allTabs || []).filter(t => t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('edge://') && !t.url.startsWith('about:') && !t.url.startsWith('chrome-extension://'));
+
+          if (readableTabs.length > 0) {
+            const candidateTab = readableTabs[0];
+            reasoningBox.innerHTML = `
+              <div style="padding: 10px; background: #fff1f2; border: 1.5px solid #fecdd3; border-radius: 10px; display: flex; flex-direction: column; gap: 8px;">
+                <div style="font-size: 11.5px; color: #9f1239; font-weight: 700; display: flex; align-items: center; gap: 6px;">
+                  <span>⚠️ Active tab is a Chrome internal page</span>
+                </div>
+                <div style="font-size: 11px; color: #475569; line-height: 1.4;">
+                  Cannot read content directly on New Tab/Settings pages. Click below to summarize your open webpage tab:
+                </div>
+                <button id="summarize-candidate-tab-btn" style="padding: 8px 12px; font-size: 11.5px; font-weight: 700; background: linear-gradient(135deg, #f43f5e, #e11d48); color: white; border: none; border-radius: 7px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 2px 8px rgba(244,63,94,0.3); transition: all 0.15s ease;">
+                  <span>⚡</span> Summarize "${escapeHtml(candidateTab.title.slice(0, 36))}${candidateTab.title.length > 36 ? '...' : ''}"
+                </button>
+              </div>
+            `;
+            updateStatus('online', 'Click to summarize open tab');
+            const candidateBtn = document.getElementById('summarize-candidate-tab-btn');
+            if (candidateBtn) {
+              candidateBtn.addEventListener('click', async () => {
+                await chrome.tabs.update(candidateTab.id, { active: true });
+                executeSummarizationWorkflow(userGoal);
+              });
+            }
+            return;
+          }
+
           reasoningBox.innerHTML = `<span style="color:#f59e0b; font-weight:600;">⚠️ You're on a browser page (New Tab, Settings, etc.) which cannot be summarized.<br><br>Please navigate to a <strong>webpage</strong> first, then click Summarize — or upload a PDF using the 📎 button.</span>`;
           updateStatus('online', 'Open a webpage to summarize');
           return;
@@ -475,7 +601,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-
       const resp = await fetch('http://127.0.0.1:5000/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -493,8 +618,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const json = await resp.json();
       currentSummaryMarkdown = json.summary || 'No summary generated.';
       const finalTitle = json.title || sourceTitle || 'Executive Summary';
+      currentSummaryTitle = finalTitle;
 
-      // Persist to storage for full-page briefing viewer
+      // 1. Persist to storage for full-page briefing viewer
       try {
         chrome.storage.local.set({
           latestSummary: {
@@ -506,19 +632,22 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       } catch (e) {}
 
-      // Pop up floating Knowledge Briefing Card directly on the Chrome tab
+      // 2. Immediately show the dedicated summary pop-up modal inside the extension side panel
+      showSummaryModal(finalTitle, currentSummaryMarkdown);
+
+      // 3. Also deliver floating summary card directly onto the webpage tab
       const delivered = await deliverFloatingSummaryToPage(finalTitle, currentSummaryMarkdown);
 
       reasoningBox.innerHTML = `
         <div style="color:#059669; font-weight:700; margin-bottom:4px; display:flex; align-items:center; gap:6px;">
-          <span>📑 Knowledge Briefing Popped Up on Tab</span>
+          <span>📑 Summary Pop-Up Generated</span>
         </div>
         <div style="font-size:11.5px; color:#334155; line-height:1.45;">
-          ${delivered ? 'Interactive floating pop-up card is now visible directly on your Chrome tab! Click <strong>✕</strong> on the card (or press Esc) to close it.' : 'Summary generated! Switch to an open webpage tab to view the floating pop-up card.'}
+          ${delivered ? 'Interactive floating card is active on your webpage tab & pop-up modal is open!' : 'Summary pop-up modal is open! Switch to a readable webpage tab to also view floating card.'}
         </div>
         <div style="margin-top:8px; display:flex; gap:8px;">
           <button id="reopen-float-card-btn" style="border:1px solid #f43f5e; background:#fff1f2; color:#e11d48; font-size:11px; font-weight:700; padding:5px 12px; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:5px; transition:all 0.15s ease;">
-            <span>🗗</span> Pop Up Card Again
+            <span>📑</span> Open Summary Pop-up
           </button>
           <button id="copy-summary-btn" style="border:1px solid #cbd5e1; background:#ffffff; color:#334155; font-size:11px; font-weight:600; padding:5px 10px; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:4px; transition:all 0.15s ease;">
             <span>📋</span> Copy Text
@@ -529,6 +658,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const reopenBtn = document.getElementById('reopen-float-card-btn');
       if (reopenBtn) {
         reopenBtn.addEventListener('click', () => {
+          showSummaryModal(finalTitle, currentSummaryMarkdown);
           deliverFloatingSummaryToPage(finalTitle, currentSummaryMarkdown);
         });
       }
@@ -549,7 +679,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       updateStatus('online', '✓ Summary Generated');
-      speakAgentMessage('Summary card popped up on webpage');
+      speakAgentMessage('Summary pop-up generated successfully');
     } catch (err) {
       console.error('[Popup] Summarization workflow failed:', err);
       reasoningBox.innerHTML = `<span style="color:#ef4444;">Error generating summary: ${escapeHtml(err.message)}</span>`;
