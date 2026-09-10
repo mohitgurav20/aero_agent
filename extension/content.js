@@ -1603,8 +1603,9 @@
       }
 
       const searchInput = document.querySelector(
-        'div[contenteditable="true"][data-tab="3"], div[role="textbox"][title*="search" i], div[role="textbox"][aria-label*="search" i], [data-testid="chat-list-search"], #twotabsearchtextbox, input#nav-search-keywords, input[name="field-keywords"], input[name="q"], input[type="search"], input[name="search"], input[aria-label*="Search" i], input[placeholder*="Search" i], textarea[name="q"]'
+        'div[contenteditable="true"][data-tab="3"], div[role="textbox"][title*="search" i], div[role="textbox"][aria-label*="search" i], [data-testid="chat-list-search"], #twotabsearchtextbox, input#nav-search-keywords, input[name="field-keywords"], input[name="q"], input[type="search"], input[name="search"], input[aria-label*="Search" i], input[placeholder*="Search" i]:not(#dashboard-repos-filter-left), textarea[name="q"]'
       ) || Array.from(document.querySelectorAll('input[type="text"], input[type="search"], input:not([type]), [contenteditable="true"]')).find(el => {
+        if (el.id === 'dashboard-repos-filter-left') return false;
         const lbl = (el.getAttribute('aria-label') || el.getAttribute('title') || el.placeholder || el.name || el.id || '').toLowerCase();
         return lbl.includes('search') || lbl.includes('query');
       });
@@ -1615,6 +1616,14 @@
     }
     // Dedicated GitHub Profile, Repositories & Account Direct Resolver
     const isGithub = window.location.hostname.includes('github.com');
+    if (isGithub && (rawTarget.includes('search') || rawTarget.includes('find repository') || rawTarget.includes('open repository for'))) {
+      const searchKwd = (step.value || rawTarget.replace(/^(?:search(?:\s+for)?|open\s+repository(?:\s+for)?|find\s+repository(?:\s+for)?|open\s+repo(?:\s+for)?)\s+/i, '').replace(/["']/g, '')).trim();
+      if (searchKwd && !window.location.pathname.includes('/search') && !rawTarget.includes('filter')) {
+        console.log(`[Content] Navigating directly to GitHub search for: ${searchKwd}`);
+        window.location.href = `https://github.com/search?q=${encodeURIComponent(searchKwd)}&type=repositories`;
+        return document.body;
+      }
+    }
     if (isGithub && (rawTarget.includes('profile') || rawTarget.includes('repo') || rawTarget.includes('avatar') || rawTarget.includes('account icon') || rawTarget.includes('user icon'))) {
       const userLogin = document.querySelector('meta[name="user-login"]')?.content ||
                         document.querySelector('meta[name="octolytics-actor-login"]')?.content ||
@@ -1833,8 +1842,18 @@
         (el.tagName === 'BUTTON' || el.tagName === 'A' || el.getAttribute('role') === 'button' || el.getAttribute('role') === 'link')) {
         continue;
       }
+      if (el.id === 'dashboard-repos-filter-left' && !rawTarget.includes('filter')) {
+        continue;
+      }
       const text = (el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.value || '').toLowerCase();
       if (!text) continue;
+
+      if (!rawTarget.includes('feedback')) {
+        const href = (el.getAttribute('href') || '').toLowerCase();
+        if (text.includes('feedback') || href.includes('feedback') || (el.id && el.id.toLowerCase().includes('feedback')) || el.hasAttribute('data-feedback-button')) {
+          continue;
+        }
+      }
 
       let score = 0;
       for (const w of words) {

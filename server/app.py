@@ -899,7 +899,7 @@ def decompose_goal():
         "   - Visibility: ONLY IF the user explicitly asked for 'private' or 'public'. NEVER add a visibility step if neither private nor public was explicitly requested!\n"
         "   - Add README: if requested, click checkbox: {\"type\": \"click\", \"target\": \"Add a README file\", \"label\": \"Check Add a README file\"}\n"
         "   - Create button: {\"type\": \"click\", \"target\": \"Create repository\", \"label\": \"Click Create repository\"}\n"
-        "   - Search repos: navigate to https://github.com/search?q=<query>&type=repositories\n"
+        "   - Search repos on GitHub: ALWAYS navigate directly to https://github.com/search?q=<query>&type=repositories (NEVER navigate to https://github.com home page when searching GitHub!)\n"
         "4. Gmail: https://mail.google.com/mail/u/0/#inbox?compose=new\n"
         "5. YouTube: https://www.youtube.com/results?search_query=<query>\n"
         "6. Canva: https://www.canva.com/presentations/ or https://www.canva.com\n"
@@ -1011,6 +1011,13 @@ def decompose_goal():
         '  {"type": "navigate", "url": "https://www.linkedin.com/search/results/all/?keywords=gsoc%20contributor", "label": "Search LinkedIn for \'gsoc contributor\'"},\n'
         '  {"type": "click", "target": "first search result", "label": "Click first search result"}\n'
         "]\n\n"
+        'Goal: "search for debian in github"\n'
+        "JSON:\n"
+        "[\n"
+        '  {"type": "navigate", "url": "https://github.com/search?q=debian&type=repositories", "label": "Search GitHub for \'debian\'"},\n'
+        '  {"type": "click", "target": "first search result", "label": "Open repository for \'debian\'"}\n'
+        "]\n\n"
+        "CRITICAL RESTRICTION: NEVER invent or add Gmail navigation, compose, or email steps unless the user explicitly requested to 'email' or provided an email address!\n"
         "Output ONLY the JSON array. No markdown commentary, no explanations.\n\n"
         f"Goal: \"{goal}\"\n"
         f"Current URL: \"{current_url}\"\n"
@@ -1089,6 +1096,16 @@ def decompose_goal():
                         if s.get("url") and s["url"].startswith("mailto:"):
                             s["url"] = "https://mail.google.com/mail/u/0/#inbox?compose=new"
                             s["label"] = "Open Gmail compose"
+
+                    # Anti-Hallucination Guard: Remove stray Gmail/email steps if user NEVER requested email
+                    has_email_intent = bool(re.search(r"\b(?:email|mail|send\s+(?:an?\s+)?email|compose|send\s+to|send\s+it\s+to)\b|@", goal, re.I))
+                    if not has_email_intent:
+                        valid_steps = [
+                            s for s in valid_steps
+                            if not (s.get("type") == "navigate" and "mail.google.com" in (s.get("url") or ""))
+                            and not (s.get("field") in ["to recipients", "subject", "message body"] and "email" in (s.get("label") or "").lower())
+                            and not ("email" in (s.get("label") or "").lower() and "compose" in (s.get("label") or "").lower())
+                        ]
 
                     # Online compilers (Programiz) do not have submit/verification buttons; remove stray submit_and_verify
                     has_prog = any("programiz.com" in (s.get("url") or "").lower() for s in valid_steps)

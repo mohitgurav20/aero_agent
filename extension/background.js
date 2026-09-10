@@ -1831,6 +1831,49 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
           }
         }
 
+        // Auto-fix GitHub search workflows to navigate directly to keywords search URL:
+        const ghNavStep = normalized.find(s => s.type === 'navigate' && s.url?.includes('github.com') && !s.url?.includes('github.com/new') && !s.url?.includes('github.com/login'));
+        const ghTypeStep = normalized.find(s => s.type === 'type' && (s.field?.toLowerCase().includes('search') || (s.label || '').toLowerCase().includes('search') || (s.target || '').toLowerCase().includes('search')));
+        if (ghNavStep && ghTypeStep && ghTypeStep.value) {
+          const kw = ghTypeStep.value;
+          ghNavStep.url = `https://github.com/search?q=${encodeURIComponent(kw)}&type=repositories`;
+          ghNavStep.label = `Search GitHub for '${kw}'`;
+          const typeIdx = normalized.indexOf(ghTypeStep);
+          if (typeIdx !== -1) {
+            normalized.splice(typeIdx, 1);
+            if (typeIdx < normalized.length) {
+              const next = normalized[typeIdx];
+              if (next && (next.type === 'press_key' || (next.type === 'click' && ((next.label || '').toLowerCase().includes('search') || (next.target || '').toLowerCase().includes('search'))))) {
+                normalized.splice(typeIdx, 1);
+              }
+            }
+          }
+        } else if (ghNavStep && !ghNavStep.url.includes('/search')) {
+          const mGhQuery = query.match(/(?:search(?:\s+for)?|find)\s+([a-zA-Z0-9_\-\s]+?)(?:\s+(?:in|on|at)\s+github|\s+and|\s*,|$)/i) ||
+                           query.match(/github[^\w]+(?:search(?:\s+for)?|find)\s+([a-zA-Z0-9_\-\s]+?)(?:\s+and|\s*,|$)/i);
+          if (mGhQuery && mGhQuery[1].trim()) {
+            const kw = mGhQuery[1].trim().replace(/^(?:github|git)\s+/i, '');
+            ghNavStep.url = `https://github.com/search?q=${encodeURIComponent(kw)}&type=repositories`;
+            ghNavStep.label = `Search GitHub for '${kw}'`;
+          }
+        }
+
+        // Anti-hallucination guard: If user goal does NOT request email/compose, strip stray Gmail/email steps
+        const userWantsEmail = /\b(?:email|mail|send\s+to|compose)\b|@/i.test(query);
+        if (!userWantsEmail) {
+          normalized = normalized.filter(s => {
+            const url = (s.url || '').toLowerCase();
+            const lbl = (s.label || '').toLowerCase();
+            const fld = (s.field || '').toLowerCase();
+            const tgt = (s.target || '').toLowerCase();
+            const val = String(s.value || '').toLowerCase();
+            const isGmailNav = url.includes('mail.google.com') || url.includes('gmail.com');
+            const isEmailField = fld.includes('recipient') || fld.includes('subject') || fld === 'to' || tgt.includes('recipient') || tgt.includes('subject');
+            const isEmailAction = lbl.includes('gmail') || lbl.includes('recipient email') || lbl.includes('type subject') || lbl.includes('send email') || (val.includes('@') && val.includes('.com'));
+            return !(isGmailNav || isEmailField || isEmailAction);
+          });
+        }
+
         // Auto-inject press_key Enter after any on-page search typing step if missing
         // (NEVER inject Enter for WhatsApp Web search as WhatsApp filters live and Enter resets/clears search!)
         for (let i = 0; i < normalized.length; i++) {

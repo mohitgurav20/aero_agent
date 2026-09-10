@@ -1200,6 +1200,10 @@ document.addEventListener('DOMContentLoaded', () => {
         liveTranscript.textContent = 'Listening to your voice...';
         liveTranscript.classList.remove('has-text');
       }
+      if (commandInput) {
+        commandInput.value = '';
+      }
+      lastExecutedCommand = '';
 
       // Start dynamic wave visualizer
       if (waveAnimInterval) clearInterval(waveAnimInterval);
