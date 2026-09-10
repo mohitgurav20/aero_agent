@@ -420,6 +420,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'resume_step_queue':
       if (activeTask) {
         activeTask._userHasSignedIn = true;
+        activeTask._signedInDomain = activeTask._currentDomain || '';
         activeTask.status = 'running';
         const pausedStep = activeTask.steps?.find(s => s.status === 'paused');
         if (pausedStep) {
@@ -2354,6 +2355,15 @@ async function attemptAutonomousSignIn(tabId, currentUrl) {
   }
 }
 
+function getDomainFromUrl(url) {
+  if (!url) return '';
+  try {
+    return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+  } catch (e) {
+    return '';
+  }
+}
+
 // ── DYNAMIC AUTH & LOGIN PAGE INSPECTOR ──────────────────────────────────────
 async function inspectAuthPageFields(tabId) {
   try {
@@ -2364,23 +2374,98 @@ async function inspectAuthPageFields(tabId) {
         const title = (document.title || '').toLowerCase();
         const url = window.location.href.toLowerCase();
 
-        // 0. FIRST: Check if the user is ALREADY logged in to an authenticated web app or on a site that never needs auth
+        // 0. FIRST: Check site-specific authentication status
         if (url.includes('programiz.com')) {
           return { isAuth: false, hasOtpOr2Fa: false, siteName: '', fields: [], ssoButtons: [] };
         }
-        const isGmailLoggedIn = url.includes('mail.google.com/mail') && (
-          document.querySelector('a[aria-label*="Google Account"], div[aria-label*="Google Account"], img[alt*="Google Account"], [aria-label="Compose"], div[gh="cm"]') !== null ||
-          document.querySelector('input[aria-label="Search mail"], div[role="navigation"]') !== null
-        );
-        const isWhatsAppLoggedIn = url.includes('web.whatsapp.com') && (
-          document.querySelector('#pane-side, [data-testid="chat-list"]') !== null
-        );
-        const isGitHubLoggedIn = url.includes('github.com') && (
-          document.querySelector('button[aria-label*="user navigation"], img.avatar-user, a[href="/new"]') !== null
-        );
-        const isLeetCodeLoggedIn = url.includes('leetcode.com') && (
-          document.querySelector('nav img[alt*="avatar"], nav a[href*="/profile"]') !== null
-        );
+
+        // WhatsApp Web check
+        if (url.includes('web.whatsapp.com')) {
+          const isWhatsAppLoggedIn = document.querySelector('#pane-side, [data-testid="chat-list"]') !== null;
+          if (!isWhatsAppLoggedIn) {
+            return {
+              isAuth: true,
+              hasOtpOr2Fa: false,
+              siteName: 'WhatsApp Web',
+              fields: [],
+              ssoButtons: [],
+              url: window.location.href,
+              message: 'Please scan the QR code with WhatsApp on your phone to log in, then click Continue.'
+            };
+          }
+          return { isAuth: false, hasOtpOr2Fa: false, siteName: '', fields: [], ssoButtons: [] };
+        }
+
+        // GitHub check
+        if (url.includes('github.com')) {
+          const isGitHubLoggedIn = document.querySelector('button[aria-label*="user navigation"], img.avatar-user, a[href="/new"]') !== null;
+          const isGithubLogin = url.includes('/login') || url.includes('/session') ||
+                                (document.querySelector('input#login_field, input[name="login"], input[type="password"]') !== null && !isGitHubLoggedIn);
+          if (isGithubLogin) {
+            return {
+              isAuth: true,
+              hasOtpOr2Fa: false,
+              siteName: 'GitHub',
+              fields: [
+                { key: 'login', name: 'login', label: 'Username or Email', type: 'text', placeholder: 'Enter GitHub username or email', selector: 'input#login_field, input[name="login"]' },
+                { key: 'password', name: 'password', label: 'Password', type: 'password', placeholder: 'Enter password', selector: 'input#password, input[type="password"]' }
+              ],
+              ssoButtons: [],
+              url: window.location.href,
+              message: 'Please sign in to your GitHub account in the browser, then click Continue.'
+            };
+          }
+          if (isGitHubLoggedIn) {
+            return { isAuth: false, hasOtpOr2Fa: false, siteName: '', fields: [], ssoButtons: [] };
+          }
+        }
+
+        // Gmail & Google Accounts check
+        if (url.includes('mail.google.com') || url.includes('accounts.google.com')) {
+          const isGmailLoggedIn = url.includes('mail.google.com') && (
+            document.querySelector('a[aria-label*="Google Account"], div[aria-label*="Google Account"], img[alt*="Google Account"], [aria-label="Compose"], div[gh="cm"]') !== null ||
+            document.querySelector('input[aria-label="Search mail"], div[role="navigation"]') !== null
+          );
+          if (url.includes('accounts.google.com') || !isGmailLoggedIn) {
+            return {
+              isAuth: true,
+              hasOtpOr2Fa: false,
+              siteName: 'Google / Gmail',
+              fields: [
+                { key: 'identifier', name: 'identifier', label: 'Email or Phone', type: 'email', placeholder: 'Enter Google email or phone', selector: 'input[type="email"], input[name="identifier"]' }
+              ],
+              ssoButtons: [],
+              url: window.location.href,
+              message: 'Please sign in to your Google Account in the browser, then click Continue.'
+            };
+          }
+          return { isAuth: false, hasOtpOr2Fa: false, siteName: '', fields: [], ssoButtons: [] };
+        }
+
+        // LeetCode check
+        if (url.includes('leetcode.com')) {
+          const isLeetCodeLoggedIn = document.querySelector('nav img[alt*="avatar"], nav a[href*="/profile"]') !== null;
+          const isLeetLogin = url.includes('/accounts/login') || (document.querySelector('input[type="password"]') !== null && !isLeetCodeLoggedIn);
+          if (isLeetLogin) {
+            return {
+              isAuth: true,
+              hasOtpOr2Fa: false,
+              siteName: 'LeetCode',
+              fields: [
+                { key: 'login', name: 'login', label: 'Username or Email', type: 'text', placeholder: 'Enter LeetCode username', selector: 'input[name="login"]' },
+                { key: 'password', name: 'password', label: 'Password', type: 'password', placeholder: 'Enter password', selector: 'input[type="password"]' }
+              ],
+              ssoButtons: [],
+              url: window.location.href,
+              message: 'Please sign in to your LeetCode account in the browser, then click Continue.'
+            };
+          }
+          if (isLeetCodeLoggedIn) {
+            return { isAuth: false, hasOtpOr2Fa: false, siteName: '', fields: [], ssoButtons: [] };
+          }
+        }
+
+        // Generic user session checks
         const isXLoggedIn = (url.includes('x.com') || url.includes('twitter.com')) && (
           document.querySelector('[data-testid="AppTabBar_Home_Link"], [data-testid="SideNav_AccountSwitcher_Button"]') !== null
         );
@@ -2393,14 +2478,11 @@ async function inspectAuthPageFields(tabId) {
         const isRedditLoggedIn = url.includes('reddit.com') && (
           document.querySelector('button[aria-label*="User account"], #user-drawer-button') !== null
         );
-        const isProgramizLoggedIn = url.includes('programiz.com') && (
-          document.querySelector('.desktop-nav-profile, button[aria-label*="Profile"]') !== null
-        );
         const hasGenericUserSession = (
           document.querySelector('[aria-label*="profile" i], [aria-label*="account" i], [aria-label*="user menu" i], img[alt*="avatar" i], img[alt*="profile" i], [data-testid*="user" i], [data-testid*="avatar" i], [class*="avatar" i], [class*="user-profile" i]') !== null
         );
 
-        if (isGmailLoggedIn || isWhatsAppLoggedIn || isGitHubLoggedIn || isLeetCodeLoggedIn || isXLoggedIn || isLinkedInLoggedIn || isNotionLoggedIn || isRedditLoggedIn || isProgramizLoggedIn || hasGenericUserSession) {
+        if (isXLoggedIn || isLinkedInLoggedIn || isNotionLoggedIn || isRedditLoggedIn || hasGenericUserSession) {
           return {
             isAuth: false,
             hasOtpOr2Fa: false,
@@ -2413,8 +2495,7 @@ async function inspectAuthPageFields(tabId) {
         // 1. Detect if this is an authentic login barrier
         const hasPasswordField = document.querySelector('input[type="password"]:not([disabled])') !== null;
         const isAuthUrl = url.includes('/login') || url.includes('/signin') || url.includes('/sign-in') ||
-                          url.includes('mode=login') || url.includes('accounts.google.com/v3/signin') ||
-                          url.includes('accounts.google.com/signin') || url.includes('/i/flow/login');
+                          url.includes('mode=login') || url.includes('accounts.google.com') || url.includes('/i/flow/login');
         const hasOtpOr2Fa = document.querySelector('input[autocomplete="one-time-code"]') !== null ||
                             (document.querySelector('input[name*="otp" i], input[id*="otp" i], input[name*="2fa" i]') !== null);
 
@@ -2424,7 +2505,8 @@ async function inspectAuthPageFields(tabId) {
           .filter(t => /continue with google|sign in with google|log in with google|sign in with apple/i.test(t))
           .map(t => t.replace(/\s+/g, ' ').trim());
 
-        const isAuth = hasPasswordField || hasOtpOr2Fa || (isAuthUrl && ssoButtons.length > 0);
+        const hasLoginForm = document.querySelector('form[action*="login" i], form[action*="signin" i], form[id*="login" i]') !== null;
+        const isAuth = hasPasswordField || hasOtpOr2Fa || (isAuthUrl && (ssoButtons.length > 0 || hasPasswordField || hasLoginForm));
 
         // 3. Extract visible interactive input fields on the login screen
         const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])'))
@@ -2600,6 +2682,15 @@ async function runStepQueue(tabId) {
     step.status = 'running';
     broadcastStepProgress();
 
+    // Domain tracking: reset login state if switching to a different website domain
+    const nextDomain = getDomainFromUrl(step.url);
+    if (activeTask._currentDomain && nextDomain && activeTask._currentDomain !== nextDomain) {
+      console.log(`[SQ] Navigating from ${activeTask._currentDomain} to ${nextDomain}. Resetting sign-in status.`);
+      activeTask._userHasSignedIn = false;
+      activeTask._signedInDomain = null;
+    }
+    activeTask._currentDomain = nextDomain;
+
     // Dynamically adapt Programiz compiler URL based on the language requested in user goal or step!
     if (step.url && step.url.includes('programiz.com')) {
       const explicitLang = detectLanguageFromText((activeTask?.goal || '') + ' ' + (step.label || ''));
@@ -2676,33 +2767,32 @@ async function runStepQueue(tabId) {
 
   // ── HUMAN-IN-THE-LOOP (HITL): Login, 2FA & Authentication Detection ─────────
   const currentTabObj = (activeTabs && activeTabs[0]) ? activeTabs[0] : null;
+  const currentDomain = getDomainFromUrl(currentTabObj?.url);
   const isExplicitLoginStep = step.label?.toLowerCase().includes('login') || step.label?.toLowerCase().includes('sign in');
 
-  // FIX P0-A: Skip the expensive auth check entirely if the user has already proven they are signed in.
-  // Previously this was checked AFTER the async call, wasting ~200ms per step and risking false positives
-  // on Gmail/LeetCode compose windows that haven't fully mounted their logged-in DOM indicators yet.
+  const alreadyVerifiedOnThisDomain = activeTask._userHasSignedIn && activeTask._signedInDomain === currentDomain;
   let authInfo = null;
-  if (!activeTask._userHasSignedIn && !isExplicitLoginStep) {
+  if (!alreadyVerifiedOnThisDomain && !isExplicitLoginStep) {
     authInfo = await inspectAuthPageFields(targetTabId);
   }
 
-  if (authInfo?.isAuth && !isExplicitLoginStep && !activeTask._userHasSignedIn) {
+  if (authInfo?.isAuth && !isExplicitLoginStep && !alreadyVerifiedOnThisDomain) {
     console.log('[SQ] HITL: Authentication or login wall detected! Pausing for user interaction on:', authInfo.siteName);
     activeTask.status = 'waiting_user_input';
     activeTask._isExecuting = false;
     step.status = 'paused';
     broadcastStepProgress();
 
-    const siteName = authInfo.siteName || 'this website';
-    const pauseMsg = authInfo.hasOtpOr2Fa
+    const siteName = authInfo.siteName || currentDomain || 'this website';
+    const pauseMsg = authInfo.message || (authInfo.hasOtpOr2Fa
       ? 'Paused: 2FA or OTP verification required. Please complete verification in browser, then click Continue.'
-      : `Sign-in required on ${siteName}. Choose Option 1 to sign in yourself, or Option 2 for the agent to auto-login.`;
+      : `Sign-in required on ${siteName}. Please sign in, then click Continue.`);
 
     broadcastStatus('waiting_user_input', pauseMsg);
 
     chrome.tabs.sendMessage(targetTabId, {
       type: 'show_hud_overlay',
-      text: `⏸️ Sign-in required on ${siteName}: Sign in on page or use Action Req tab`,
+      text: `⏸️ Sign-in required on ${siteName}: Please sign in, then click Continue`,
       paused: true
     }).catch(() => {});
 
@@ -4125,60 +4215,37 @@ async function runStepQueue(tabId) {
       return;
     }
 
-    // Check if the element is missing because of an authentication or login barrier on the page!
-    let barrierDetected = false;
-    let barrierSsoButtons = [];
-    try {
-      const pageCheck = await chrome.scripting.executeScript({
-        target: { tabId: targetTabId },
-        func: () => {
-          const url = window.location.href.toLowerCase();
-          const isAuthedApp = url.includes('mail.google.com/mail') || url.includes('web.whatsapp.com') ||
-                              url.includes('github.com') || url.includes('leetcode.com');
-          if (isAuthedApp) {
-            return { isBarrier: false, ssoButtons: [] };
-          }
-          const hasPasswordField = document.querySelector('input[type="password"]:not([disabled])') !== null;
-          const isLoginUrl = url.includes('/login') || url.includes('/signin') || url.includes('/sign-in') || url.includes('accounts.google.com');
-          const isX = (url.includes('x.com') || url.includes('twitter.com')) && (document.querySelector('input[autocomplete="username"]') !== null || hasPasswordField);
-          const ssoButtons = Array.from(document.querySelectorAll('button, a, div[role="button"]'))
-            .map(b => (b.innerText || b.textContent || '').trim())
-            .filter(t => /continue with google|sign in with google|log in with google/i.test(t));
-          return { isBarrier: hasPasswordField || (isLoginUrl && ssoButtons.length > 0) || isX, ssoButtons: [...new Set(ssoButtons)].slice(0, 4) };
-        }
-      });
-      if (pageCheck?.[0]?.result?.isBarrier) {
-        barrierDetected = true;
-        barrierSsoButtons = pageCheck?.[0]?.result?.ssoButtons || [];
-      }
-    } catch(e) {}
-
-    if (barrierDetected && !activeTask._userHasSignedIn) {
-      console.warn(`[SQ] Element for "${step.label}" missing due to login barrier. Pausing task...`);
+    // Check if the element is missing because the user is not logged in / auth barrier on the page!
+    const barrierAuthInfo = await inspectAuthPageFields(targetTabId);
+    if (barrierAuthInfo?.isAuth) {
+      console.warn(`[SQ] Element for "${step.label}" missing because ${barrierAuthInfo.siteName} is not logged in. Strictly pausing task...`);
       activeTask.status = 'waiting_user_input';
       activeTask._isExecuting = false;
+      activeTask._userHasSignedIn = false;
+      activeTask._signedInDomain = null;
       step.status = 'paused';
       broadcastStepProgress();
 
-      let siteHost = 'this website';
-      try { siteHost = new URL(currentTabObj?.url || 'https://site.com').hostname.replace('www.', ''); } catch(e) {}
-      const pauseMsg = `Sign-in required on ${siteHost} to proceed with "${step.label}". Please sign in in your browser or Side Panel.`;
+      const siteHost = barrierAuthInfo.siteName || currentDomain || 'this website';
+      const pauseMsg = barrierAuthInfo.message || `Sign-in required on ${siteHost} to proceed with "${step.label}". Please sign in in your browser or Side Panel, then click Continue.`;
       broadcastStatus('waiting_user_input', pauseMsg);
 
       chrome.tabs.sendMessage(targetTabId, {
         type: 'show_hud_overlay',
-        text: `⏸️ Sign-in required on ${siteHost}: Please sign in, then click Continue in Side Panel`,
+        text: `⏸️ Sign-in required on ${siteHost}: Please sign in, then click Continue`,
         paused: true
       }).catch(() => {});
 
       chrome.runtime.sendMessage({
         type: 'require_user_input',
         payload: {
-          reason: 'login_credentials',
-          title: `Sign-in Required on ${siteHost}`,
+          reason: barrierAuthInfo.hasOtpOr2Fa ? 'otp_2fa' : 'login_credentials',
+          title: barrierAuthInfo.hasOtpOr2Fa ? '2FA Verification Required' : `Sign-in Required on ${siteHost}`,
+          siteName: siteHost,
           message: pauseMsg,
-          url: currentTabObj?.url || '',
-          ssoButtons: barrierSsoButtons
+          url: barrierAuthInfo.url || currentTabObj?.url || '',
+          fields: barrierAuthInfo.fields,
+          ssoButtons: barrierAuthInfo.ssoButtons
         }
       }).catch(() => {});
       return;
@@ -4271,6 +4338,39 @@ async function runStepQueue(tabId) {
         broadcastStepProgress();
         activeTask._isExecuting = false;
         setTimeout(() => runStepQueue(targetTabId), 500);
+        return;
+      }
+
+      // Before advancing, ensure this failure wasn't caused by an unauthenticated / sign-in screen
+      const lateAuthCheck = await inspectAuthPageFields(targetTabId);
+      if (lateAuthCheck?.isAuth) {
+        console.warn(`[SQ] Target element for "${step.label}" missing because ${lateAuthCheck.siteName} is not logged in. Strictly pausing task...`);
+        activeTask.status = 'waiting_user_input';
+        activeTask._isExecuting = false;
+        activeTask._userHasSignedIn = false;
+        activeTask._signedInDomain = null;
+        step.status = 'paused';
+        broadcastStepProgress();
+        const siteHost = lateAuthCheck.siteName || currentDomain || 'this website';
+        const pauseMsg = lateAuthCheck.message || `Sign-in required on ${siteHost} to proceed. Please sign in in your browser or Side Panel, then click Continue.`;
+        broadcastStatus('waiting_user_input', pauseMsg);
+        chrome.tabs.sendMessage(targetTabId, {
+          type: 'show_hud_overlay',
+          text: `⏸️ Sign-in required on ${siteHost}: Please sign in, then click Continue`,
+          paused: true
+        }).catch(() => {});
+        chrome.runtime.sendMessage({
+          type: 'require_user_input',
+          payload: {
+            reason: lateAuthCheck.hasOtpOr2Fa ? 'otp_2fa' : 'login_credentials',
+            title: lateAuthCheck.hasOtpOr2Fa ? '2FA Verification Required' : `Sign-in Required on ${siteHost}`,
+            siteName: siteHost,
+            message: pauseMsg,
+            url: lateAuthCheck.url || '',
+            fields: lateAuthCheck.fields,
+            ssoButtons: lateAuthCheck.ssoButtons
+          }
+        }).catch(() => {});
         return;
       }
 
@@ -4546,6 +4646,19 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (activeTask.status === 'navigating') {
       console.log('[SQ] Tab navigation complete, inspecting destination page on tab:', tabId, tab.url);
 
+      const pageDomain = getDomainFromUrl(tab.url);
+      if (activeTask._currentDomain && pageDomain && activeTask._currentDomain !== pageDomain) {
+        console.log(`[SQ] Tab domain changed from ${activeTask._currentDomain} to ${pageDomain}. Resetting sign-in status.`);
+        activeTask._userHasSignedIn = false;
+        activeTask._signedInDomain = null;
+      }
+      activeTask._currentDomain = pageDomain;
+
+      // Allow SPA bundles (WhatsApp Web, Monaco editor, Google Accounts) a moment to initialize
+      if (tab.url && tab.url.includes('web.whatsapp.com')) {
+        await new Promise(r => setTimeout(r, 1200));
+      }
+
       // Check if newly loaded page is an authentication wall / login modal
       const currentUrl = (tab.url || '').toLowerCase();
       const isAuthUrlPattern = currentUrl.includes('/login') ||
@@ -4558,13 +4671,14 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
       const authInfo = await inspectAuthPageFields(tabId);
       const isAuthDetected = authInfo?.isAuth || isAuthUrlPattern;
+      const alreadyVerified = activeTask._userHasSignedIn && activeTask._signedInDomain === pageDomain;
 
-      if (isAuthDetected && !activeTask._userHasSignedIn) {
-        console.log('[SQ] Post-navigation Login Wall / Auth Barrier Detected! Pausing for HITL on:', tab.url);
+      if (isAuthDetected && !alreadyVerified) {
+        console.log('[SQ] Post-navigation Login Wall / Auth Barrier Detected! Strictly pausing for HITL on:', tab.url);
         activeTask.status = 'waiting_user_input';
         activeTask._isExecuting = false;
 
-        let siteName = authInfo?.siteName || 'this website';
+        let siteName = authInfo?.siteName || pageDomain || 'this website';
         try {
           if (!siteName || siteName === 'this website') {
             siteName = new URL(tab.url).hostname.replace('www.', '');
@@ -4584,12 +4698,12 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         }
         broadcastStepProgress();
 
-        const pauseMsg = `Sign-in required on ${siteName}. Choose Option 1 to sign in yourself, or Option 2 for the agent to auto-login.`;
+        const pauseMsg = authInfo?.message || `Sign-in required on ${siteName}. Please sign in in your browser or Side Panel, then click Continue.`;
         broadcastStatus('waiting_user_input', pauseMsg);
 
         chrome.tabs.sendMessage(tabId, {
           type: 'show_hud_overlay',
-          text: `⏸️ Sign-in required on ${siteName}: Sign in on page or use Action Req tab`,
+          text: `⏸️ Sign-in required on ${siteName}: Please sign in, then click Continue`,
           paused: true
         }).catch(() => {});
 

@@ -89,7 +89,32 @@
           max-width: 90vw !important;
         }
         #aero-agent-hud-pill.paused {
-          border-color: rgba(245, 158, 11, 0.65) !important;
+          border-color: rgba(245, 158, 11, 0.75) !important;
+          pointer-events: auto !important;
+        }
+        #aero-agent-hud-continue-btn {
+          background: #2563eb !important;
+          color: #ffffff !important;
+          border: none !important;
+          border-radius: 12px !important;
+          padding: 3px 12px !important;
+          font-size: 11.5px !important;
+          font-weight: 600 !important;
+          cursor: pointer !important;
+          pointer-events: auto !important;
+          display: inline-flex !important;
+          align-items: center !important;
+          gap: 4px !important;
+          margin-left: 6px !important;
+          box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4) !important;
+          transition: all 0.15s ease !important;
+        }
+        #aero-agent-hud-continue-btn:hover {
+          background: #1d4ed8 !important;
+          transform: scale(1.04) !important;
+        }
+        #aero-agent-hud-continue-btn:active {
+          transform: scale(0.96) !important;
         }
         #aero-agent-hud-dot {
           width: 8px !important;
@@ -162,10 +187,30 @@
         hudTextSpan.textContent = text;
       }
       if (hudPillElement) {
+        let continueBtn = hudPillElement.querySelector('#aero-agent-hud-continue-btn');
         if (isPaused) {
           hudPillElement.classList.add('paused');
+          if (!continueBtn) {
+            continueBtn = document.createElement('button');
+            continueBtn.id = 'aero-agent-hud-continue-btn';
+            continueBtn.textContent = 'Continue ▶';
+            continueBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              continueBtn.textContent = 'Resuming...';
+              continueBtn.disabled = true;
+              chrome.runtime.sendMessage({ type: 'resume_step_queue' }).catch(() => {});
+            });
+            hudPillElement.appendChild(continueBtn);
+          }
+          continueBtn.style.display = 'inline-flex';
+          continueBtn.textContent = 'Continue ▶';
+          continueBtn.disabled = false;
         } else {
           hudPillElement.classList.remove('paused');
+          if (continueBtn) {
+            continueBtn.style.display = 'none';
+          }
         }
       }
       hudOverlayContainer.classList.add('active');
@@ -178,6 +223,11 @@
     try {
       if (hudOverlayContainer) {
         hudOverlayContainer.classList.remove('active');
+      }
+      if (hudPillElement) {
+        hudPillElement.classList.remove('paused');
+        const continueBtn = hudPillElement.querySelector('#aero-agent-hud-continue-btn');
+        if (continueBtn) continueBtn.style.display = 'none';
       }
       removeTargetReticle();
     } catch (e) { }
