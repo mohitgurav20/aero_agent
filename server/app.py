@@ -301,6 +301,9 @@ def process_voice():
         ("whtt", "what"),
         ("code chef", "codechef"),
         ("hacker rank", "hackerrank"),
+        ("heima", "hey"),
+        ("foe", "for"),
+        ("sih", "SIH"),
     ]
     canonical = raw_text.lower()
     for src, dst in phonetic_map:
@@ -867,6 +870,8 @@ def decompose_goal():
         "   - Compose message: type into 'Type a message' box.\n"
         "     * HUMAN-BRAINED NATURAL TONE MANDATE: Compose genuine, authentic, natural human messages (1-2 sentences max). Write like a real person messaging a friend/family member/colleague, NOT like a corporate robot or Hallmark greeting card.\n"
         "     * CONTEXT & DETAIL SENSITIVITY: Deeply honor all specific details in the user request (e.g. duration 'for 2 weeks', specific recipient relationship like 'didi' = sister -> warm, respectful tone, e.g. 'Hi Didi, wishing you a wonderful two-week holiday! Hope you have a restful break!').\n"
+        "     * SPEECH-TO-TEXT & PHONETIC TYPO RECOVERY: Intelligently infer user intent from phonetic or whisper errors (e.g. 'heima' -> 'Hey!', 'foe' -> 'for', 'sih' -> 'SIH presentation'). NEVER echo raw garbled speech tokens like 'Heima reminder' in the message.\n"
+        "     * PEER-TO-PEER INTELLIGENT COMPOSITION: When messaging a friend/classmate/teammate (like Chinmay, Suresh), write like a supportive colleague (e.g. 'Hey Chinmay! Quick reminder about our SIH presentation. Hope you are ready and all set. Good luck!'). Make it look genuinely intelligent, thoughtful, and natural.\n"
         "     * ZERO DUPLICATION: Never repeat sentences or phrases. Exactly one crisp message.\n"
         "   - Send: press_key 'Enter' or click send button.\n"
         "2. LeetCode / Coding Tasks:\n"
@@ -921,6 +926,15 @@ def decompose_goal():
         "    - LinkedIn Search: ALWAYS navigate directly to https://www.linkedin.com/search/results/all/?keywords=<query>\n"
         "    - Search execution: When typing a query into any website search box, ALWAYS follow the typing step with: {\"type\": \"press_key\", \"key\": \"Enter\", \"label\": \"Submit search\"} unless navigating directly to the search URL.\n\n"
         "Examples:\n"
+        'Goal: "open whatsapp , search chinmay cse 10 , send heima reminder message foe sih presentation"\n'
+        "JSON:\n"
+        "[\n"
+        '  {"type": "navigate", "url": "https://web.whatsapp.com/", "label": "Open WhatsApp Web"},\n'
+        '  {"type": "type", "field": "Search or start a new chat", "value": "chinmay cse 10", "label": "Search for \'chinmay cse 10\'"},\n'
+        '  {"type": "click", "target": "chinmay cse 10", "label": "Open chat with chinmay cse 10"},\n'
+        '  {"type": "type", "field": "Type a message", "value": "Hey Chinmay! Quick reminder about our SIH presentation. Hope you are ready and all set. Good luck!", "label": "Type reminder message"},\n'
+        '  {"type": "press_key", "key": "Enter", "label": "Send message"}\n'
+        "]\n\n"
         'Goal: "open github create new repo , repo name walnut , discreption walnuts have more fat , add readme file , create it"\n'
         "JSON:\n"
         "[\n"
@@ -1020,13 +1034,30 @@ def decompose_goal():
                         if not val or not isinstance(val, str):
                             return val
                         t = val.strip()
+                        # Exact multiple string copies: A * n == t
                         for n in (4, 3, 2):
                             if len(t) % n == 0:
                                 part_len = len(t) // n
                                 part = t[:part_len]
                                 if part * n == t:
                                     return part.strip()
-                        return val
+                        # Symmetrical duplication: first half matches second half
+                        half = len(t) // 2
+                        if t[:half].strip() == t[half:].strip():
+                            return t[:half].strip()
+                        # Sentence-level duplication: e.g. "Sentence 1. Sentence 1."
+                        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', t) if s.strip()]
+                        if len(sentences) >= 2:
+                            if len(sentences) % 2 == 0 and sentences[:len(sentences)//2] == sentences[len(sentences)//2:]:
+                                return " ".join(sentences[:len(sentences)//2])
+                            # Remove consecutive duplicate sentences
+                            deduped = []
+                            for s in sentences:
+                                if not deduped or deduped[-1] != s:
+                                    deduped.append(s)
+                            if len(deduped) < len(sentences):
+                                return " ".join(deduped)
+                        return t
 
                     valid_steps = []
                     for s in steps:

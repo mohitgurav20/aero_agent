@@ -1016,22 +1016,89 @@
         try { targetEditable.click(); } catch (e) { }
       }
 
-      // Deduplicate consecutive repeated text if LLM or prompt repeated sentences
+      // Deduplicate consecutive repeated text if LLM or prompt repeated sentences or halves
       const dedupeConsecutive = (str) => {
         if (!str || typeof str !== 'string') return str;
-        const trimmed = str.trim();
+        let trimmed = str.trim();
+        // Exact parts: ABCABC -> ABC
         for (let parts = 4; parts >= 2; parts--) {
           if (trimmed.length % parts === 0) {
             const partLen = trimmed.length / parts;
             const sub = trimmed.substring(0, partLen);
             if (sub.repeat(parts) === trimmed) {
-              return sub.trim();
+              trimmed = sub.trim();
             }
           }
         }
-        return str;
+        // Symmetrical halves: "Sentence. Sentence." or "texttext"
+        const half = Math.floor(trimmed.length / 2);
+        if (trimmed.length >= 10 && trimmed.slice(0, half).trim() === trimmed.slice(half).trim()) {
+          trimmed = trimmed.slice(0, half).trim();
+        }
+        // Sentence-level duplication
+        const sents = trimmed.split(/(?<=[.!?])\s+/);
+        if (sents.length >= 2 && sents.length % 2 === 0) {
+          const mid = sents.length / 2;
+          if (sents.slice(0, mid).join(' ') === sents.slice(mid).join(' ')) {
+            trimmed = sents.slice(0, mid).join(' ');
+          }
+        }
+        return trimmed;
       };
       const cleanText = dedupeConsecutive(text);
+
+      const isWhatsApp = window.location.hostname.includes('whatsapp.com');
+
+      // Dedicated WhatsApp Web Lexical Editor Input
+      if (isWhatsApp) {
+        targetEditable.focus();
+        try {
+          document.execCommand('selectAll', false, null);
+          document.execCommand('delete', false, null);
+        } catch (e) {}
+        await sleep(60);
+
+        // Insert text once using execCommand
+        let inserted = false;
+        try {
+          inserted = document.execCommand('insertText', false, cleanText);
+        } catch (e) {}
+
+        await sleep(60);
+        let curVal = (targetEditable.innerText || targetEditable.textContent || '').trim();
+
+        // Fallback to paste only if text completely failed to insert
+        if (!curVal || !curVal.includes(cleanText.slice(0, Math.min(10, cleanText.length)))) {
+          try {
+            const dt = new DataTransfer();
+            dt.setData('text/plain', cleanText);
+            targetEditable.dispatchEvent(new ClipboardEvent('paste', {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: dt
+            }));
+          } catch (e) {}
+          await sleep(60);
+          curVal = (targetEditable.innerText || targetEditable.textContent || '').trim();
+        }
+
+        // Self-healing: if text got duplicated in the DOM, clean it to a single copy
+        if (curVal.length >= cleanText.length * 1.7 && curVal.includes(cleanText)) {
+          console.warn('[Content] Detected duplicate text in WhatsApp editor; resetting to single copy');
+          try {
+            document.execCommand('selectAll', false, null);
+            document.execCommand('delete', false, null);
+            document.execCommand('insertText', false, cleanText);
+          } catch (e) {}
+        }
+
+        targetEditable.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        targetEditable.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+        await sleep(200);
+        element.style.outline = prevOutline;
+        removeTargetReticle();
+        return;
+      }
 
       // Select and clear any previous draft text
       try {
@@ -1943,6 +2010,28 @@
             const keyCode = keyName === 'Enter' ? 13 : (keyName === 'Tab' ? 9 : 0);
             const keyInit = { key: keyName, code: keyName, keyCode, which: keyCode, bubbles: true, cancelable: true };
             const target = (document.activeElement && document.activeElement !== document.body) ? document.activeElement : (lastInteractedElement || document.body);
+
+            // DEDICATED SOLE TRIGGER FOR WHATSAPP WEB MESSAGE SEND:
+            if (window.location.hostname.includes('whatsapp.com') && keyName === 'Enter') {
+              const waSendBtn = document.querySelector('span[data-icon="send"], button[aria-label*="send" i], [data-testid="send"], [data-testid="compose-btn-send"], footer button:has(span[data-icon="send"])');
+              if (waSendBtn) {
+                // Strict debounce guard: never send more than once in 2.5 seconds
+                const now = Date.now();
+                if (window._lastWaSendTime && (now - window._lastWaSendTime < 2500)) {
+                  console.log('[Content] Debounced duplicate WhatsApp send request within 2500ms');
+                  result.success = true;
+                  result.page_changed = true;
+                  break;
+                }
+                window._lastWaSendTime = now;
+                console.log('[Content] Tapping WhatsApp Send button as sole sender:', waSendBtn);
+                await simulateClick(waSendBtn);
+                result.success = true;
+                result.page_changed = true;
+                break;
+              }
+            }
+
             target.dispatchEvent(new KeyboardEvent('keydown', keyInit));
             target.dispatchEvent(new KeyboardEvent('keypress', keyInit));
             target.dispatchEvent(new KeyboardEvent('keyup', keyInit));
@@ -1951,15 +2040,6 @@
             // Synthetic KeyboardEvent('Enter') does NOT trigger browser default form submission.
             // Actively locate and tap the search icon / submit button or trigger form.requestSubmit().
             if (keyName === 'Enter') {
-              // WhatsApp Web: click Send button if present
-              const waSendBtn = document.querySelector('span[data-icon="send"], button[aria-label*="send" i], [data-testid="send"], [data-testid="compose-btn-send"], footer button:has(span[data-icon="send"])');
-              if (waSendBtn) {
-                console.log('[Content] Tapping WhatsApp Send button on Enter:', waSendBtn);
-                await simulateClick(waSendBtn);
-                result.success = true;
-                result.page_changed = true;
-                break;
-              }
 
               // LinkedIn: click "See all results" or submit button if on LinkedIn
               if (window.location.hostname.includes('linkedin.com')) {

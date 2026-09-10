@@ -1392,6 +1392,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let text = rawInput;
     const originalGoal = text || (attachedDocument ? `Process and summarize ${attachedDocument.name}` : 'Run task');
+    commandInput.value = '';
 
     if (attachedDocument && attachedDocument.extractedText) {
       text = text

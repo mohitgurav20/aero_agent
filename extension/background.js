@@ -1581,6 +1581,7 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
     [/\bstack\s*overflow\b/gi, 'stackoverflow'], [/\bgeeks\s*for\s*geeks\b/gi, 'geeksforgeeks'],
     [/\b(?:the|than)\s+open\b/gi, 'then open'],
     [/\bsort\s+colours\b/gi, 'sort colors'], [/\bcolours\b/gi, 'colors'],
+    [/\bheima\b/gi, 'hey'], [/\bfoe\b/gi, 'for'],
   ];
   for (const [p, r] of PHONETIC) q = q.replace(p, r);
 
@@ -1641,6 +1642,26 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
             if (step.type === 'type' && step.field) {
               const normalKey = step.field.toLowerCase().trim();
               step.field = fieldMap[normalKey] || step.field;
+            }
+            // Strict value deduplication for any generated text
+            if (step.type === 'type' && typeof step.value === 'string') {
+              let v = step.value.trim();
+              for (let parts = 4; parts >= 2; parts--) {
+                if (v.length % parts === 0) {
+                  const partLen = v.length / parts;
+                  const sub = v.substring(0, partLen);
+                  if (sub.repeat(parts) === v) {
+                    v = sub.trim();
+                  }
+                }
+              }
+              const half = Math.floor(v.length / 2);
+              if (v.length >= 10 && v.slice(0, half).trim() === v.slice(half).trim()) {
+                v = v.slice(0, half).trim();
+              }
+              // Clean any robotic speech-to-text remnants
+              v = v.replace(/^heima\s+reminder(?:\s+(?:for|foe))?/i, 'Quick reminder for');
+              step.value = v;
             }
             return step;
           });
@@ -2514,8 +2535,21 @@ async function runStepQueue(tabId) {
   }
 
   const step = pendingSteps[0];
+  step.status = 'running';
   console.log('[SQ] Executing step:', step);
   broadcastStatus('acting', `${step.label}...`);
+
+  // Guard against sending duplicate messages within the same task
+  const isSendStep = (step.type === 'press_key' && step.key === 'Enter' && (step.label || '').toLowerCase().includes('send')) ||
+                     (step.type === 'click' && (step.label || '').toLowerCase().includes('send'));
+  if (isSendStep && activeTask._messageAlreadySent) {
+    console.log('[SQ] Message already sent in this task. Auto-completing redundant send step:', step.label);
+    step.status = 'done';
+    broadcastStepProgress();
+    activeTask._isExecuting = false;
+    setTimeout(() => runStepQueue(tabId), 100);
+    return;
+  }
 
   // ── WAIT FOR USER (HITL LOGIN CONFIRMATION) ─────────────────────────────────
   const isWaitStep = step.type === 'wait_for_user' ||
@@ -4200,6 +4234,7 @@ async function runStepQueue(tabId) {
     step.status = 'done';
     broadcastStepProgress();
     broadcastStatus('acting', `✓ ${step.label}`);
+    if (isSendStep) activeTask._messageAlreadySent = true;
 
     // Broadcast generated email / artifact to side panel ONLY for genuine email tasks (never for WhatsApp or chat apps)
     const activeGoalStr = (activeTask.goal || '').toLowerCase();
