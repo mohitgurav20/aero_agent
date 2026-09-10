@@ -60,83 +60,64 @@
           position: absolute !important;
           inset: 0 !important;
           pointer-events: none !important;
-          box-shadow: inset 0 0 70px 14px rgba(59, 130, 246, 0.28), inset 0 0 140px 30px rgba(14, 165, 233, 0.16) !important;
-          border: 2px solid rgba(56, 189, 248, 0.45) !important;
+          border: 1.5px solid rgba(59, 130, 246, 0.4) !important;
           box-sizing: border-box !important;
-          animation: aero-border-pulse 3s infinite ease-in-out !important;
         }
         #aero-agent-hud-pill {
           position: absolute !important;
-          top: 18px !important;
+          top: 16px !important;
           left: 50% !important;
           transform: translateX(-50%) !important;
           display: inline-flex !important;
           align-items: center !important;
-          gap: 10px !important;
-          padding: 8px 18px !important;
-          background: rgba(15, 23, 42, 0.88) !important;
-          backdrop-filter: blur(14px) !important;
-          -webkit-backdrop-filter: blur(14px) !important;
-          border: 1.5px solid rgba(56, 189, 248, 0.6) !important;
-          border-radius: 9999px !important;
-          color: #ffffff !important;
+          gap: 9px !important;
+          padding: 6px 16px !important;
+          background: rgba(15, 23, 42, 0.92) !important;
+          backdrop-filter: blur(12px) !important;
+          -webkit-backdrop-filter: blur(12px) !important;
+          border: 1px solid rgba(255, 255, 255, 0.12) !important;
+          border-radius: 20px !important;
+          color: #f8fafc !important;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-          font-size: 13px !important;
-          font-weight: 600 !important;
-          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 0 22px rgba(56, 189, 248, 0.35) !important;
-          letter-spacing: 0.2px !important;
+          font-size: 12.5px !important;
+          font-weight: 500 !important;
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28) !important;
+          letter-spacing: 0.1px !important;
           pointer-events: none !important;
-          transition: all 0.25s ease !important;
+          transition: all 0.2s ease !important;
           white-space: nowrap !important;
           max-width: 90vw !important;
         }
         #aero-agent-hud-pill.paused {
-          border-color: rgba(245, 158, 11, 0.85) !important;
-          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 0 25px rgba(245, 158, 11, 0.45) !important;
+          border-color: rgba(245, 158, 11, 0.65) !important;
         }
         #aero-agent-hud-dot {
-          width: 9px !important;
-          height: 9px !important;
+          width: 8px !important;
+          height: 8px !important;
           border-radius: 50% !important;
-          background: #38bdf8 !important;
-          box-shadow: 0 0 10px #38bdf8, 0 0 18px #0ea5e9 !important;
-          animation: aero-hud-dot-pulse 1.2s infinite ease-in-out !important;
+          background: #10b981 !important;
           flex-shrink: 0 !important;
         }
         #aero-agent-hud-pill.paused #aero-agent-hud-dot {
           background: #f59e0b !important;
-          box-shadow: 0 0 10px #f59e0b, 0 0 18px #d97706 !important;
         }
         #aero-agent-target-reticle {
           position: absolute !important;
           pointer-events: none !important;
           z-index: 2147483642 !important;
-          border: 2.5px solid #38bdf8 !important;
-          border-radius: 6px !important;
-          box-shadow: 0 0 22px rgba(56, 189, 248, 0.85), inset 0 0 12px rgba(56, 189, 248, 0.4) !important;
-          transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
+          border: 2px solid #2563eb !important;
+          border-radius: 4px !important;
+          box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18) !important;
+          transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;
           opacity: 0;
           visibility: hidden;
         }
         #aero-agent-target-reticle.active {
           opacity: 1 !important;
           visibility: visible !important;
-          animation: aero-reticle-breathe 1.5s infinite alternate ease-in-out !important;
-        }
-        @keyframes aero-border-pulse {
-          0%, 100% { border-color: rgba(56, 189, 248, 0.35); }
-          50% { border-color: rgba(59, 130, 246, 0.75); }
-        }
-        @keyframes aero-hud-dot-pulse {
-          0%, 100% { transform: scale(1); opacity: 1; }
-          50% { transform: scale(1.35); opacity: 0.65; }
-        }
-        @keyframes aero-reticle-breathe {
-          0% { box-shadow: 0 0 16px rgba(56, 189, 248, 0.65); }
-          100% { box-shadow: 0 0 28px rgba(56, 189, 248, 0.95); }
         }
         @keyframes aeroSlideDown {
-          0% { opacity: 0; transform: translateY(-20px) scale(0.97); }
+          0% { opacity: 0; transform: translateY(-12px) scale(0.98); }
           100% { opacity: 1; transform: translateY(0) scale(1); }
         }
       `;
@@ -1348,19 +1329,22 @@
         }
       }
 
-      // Contact / chat matching in WhatsApp Web chat list
+      // Contact / chat matching in WhatsApp Web chat list - strictly inside side pane!
       const cleanName = rawTarget.replace(/^(?:open\s+chat\s+with|chat\s+with|open\s+chat|select\s+chat\s+with|select\s+chat|click\s+on\s+contact|click\s+contact|contact|chat|user)\s+/i, '').trim();
       if (cleanName) {
-        const waContact = document.querySelector(
-          `#side span[title*="${cleanName}" i], span[title*="${cleanName}" i], div[title*="${cleanName}" i], [role="listitem"]:has(span[title*="${cleanName}" i]), [role="row"]:has(span[title*="${cleanName}" i]), div[data-testid*="cell"]:has(span[title*="${cleanName}" i])`
-        ) || Array.from(document.querySelectorAll('#side div[role="listitem"], #side div[role="row"], #side div[role="gridcell"], #side div._ak8l, #side div._ak72, #side div._ak73, #side span[title], #side div[title], [role="listitem"], [role="row"]')).find(el => {
-          const title = (el.getAttribute('title') || '').toLowerCase();
-          const text = (el.innerText || el.textContent || '').toLowerCase();
-          return (title.includes(cleanName) || text.includes(cleanName)) && text.length < 90;
-        });
-        if (waContact) {
-          console.log('[Content] Matched WhatsApp Web contact/chat:', waContact);
-          return waContact;
+        const sidePane = document.querySelector('#pane-side, #side');
+        if (sidePane) {
+          const waContact = sidePane.querySelector(
+            `span[title*="${cleanName}" i], div[title*="${cleanName}" i], [role="listitem"]:has(span[title*="${cleanName}" i]), [role="row"]:has(span[title*="${cleanName}" i]), div[data-testid*="cell"]:has(span[title*="${cleanName}" i])`
+          ) || Array.from(sidePane.querySelectorAll('div[role="listitem"], div[role="row"], div[role="gridcell"], div._ak8l, div._ak72, div._ak73, span[title], div[title]')).find(el => {
+            const title = (el.getAttribute('title') || '').toLowerCase();
+            const text = (el.innerText || el.textContent || '').toLowerCase();
+            return (title.includes(cleanName) || text.includes(cleanName)) && text.length < 90;
+          });
+          if (waContact) {
+            console.log('[Content] Matched WhatsApp Web contact/chat in side pane:', waContact);
+            return waContact;
+          }
         }
       }
     }
@@ -1746,16 +1730,32 @@
 
     // Direct contact / recipient / chat row selector (WhatsApp Web, Telegram, Slack, etc.)
     if (step.action === 'click' || step.type === 'click') {
-      const contactEl = document.querySelector(
-        `span[title*="${rawTarget}" i], div[title*="${rawTarget}" i], [role="listitem"]:has(span[title*="${rawTarget}" i]), [role="row"]:has(span[title*="${rawTarget}" i]), div[data-testid*="cell"]:has(span[title*="${rawTarget}" i]), [data-testid="chat-list"] span[title*="${rawTarget}" i]`
-      ) || Array.from(document.querySelectorAll('div[role="listitem"], div[role="row"], div[role="gridcell"], div[data-testid*="cell"], div[data-testid*="chat"], div._ak8l, div._ak72, div._ak73, span[title], div[title]')).find(el => {
-        const titleAttr = (el.getAttribute('title') || '').toLowerCase();
-        const text = (el.innerText || el.textContent || '').toLowerCase();
-        return (titleAttr.includes(rawTarget) || text.includes(rawTarget)) && text.length < 80;
-      });
-      if (contactEl) {
-        console.log('[Content] Matched contact/chat element semantically:', contactEl);
-        return contactEl;
+      if (window.location.hostname.includes('whatsapp.com')) {
+        const sidePane = document.querySelector('#pane-side, #side');
+        if (sidePane) {
+          const contactEl = sidePane.querySelector(`span[title*="${rawTarget}" i], div[title*="${rawTarget}" i]`)
+            || Array.from(sidePane.querySelectorAll('div[role="listitem"], div[role="row"], div[role="gridcell"], div[data-testid*="cell"], div._ak8l, div._ak72, div._ak73, span[title], div[title]')).find(el => {
+              const titleAttr = (el.getAttribute('title') || '').toLowerCase();
+              const text = (el.innerText || el.textContent || '').toLowerCase();
+              return (titleAttr.includes(rawTarget) || text.includes(rawTarget)) && text.length < 80;
+            });
+          if (contactEl) {
+            console.log('[Content] Matched WhatsApp contact in side pane:', contactEl);
+            return contactEl;
+          }
+        }
+      } else {
+        const contactEl = document.querySelector(
+          `span[title*="${rawTarget}" i], div[title*="${rawTarget}" i], [role="listitem"]:has(span[title*="${rawTarget}" i]), [role="row"]:has(span[title*="${rawTarget}" i]), div[data-testid*="cell"]:has(span[title*="${rawTarget}" i]), [data-testid="chat-list"] span[title*="${rawTarget}" i]`
+        ) || Array.from(document.querySelectorAll('div[role="listitem"], div[role="row"], div[role="gridcell"], div[data-testid*="cell"], div[data-testid*="chat"], div._ak8l, div._ak72, div._ak73, span[title], div[title]')).find(el => {
+          const titleAttr = (el.getAttribute('title') || '').toLowerCase();
+          const text = (el.innerText || el.textContent || '').toLowerCase();
+          return (titleAttr.includes(rawTarget) || text.includes(rawTarget)) && text.length < 80;
+        });
+        if (contactEl) {
+          console.log('[Content] Matched contact/chat element semantically:', contactEl);
+          return contactEl;
+        }
       }
     }
 
@@ -1961,6 +1961,25 @@
               break;
             }
             await simulateClick(targetNode);
+            if (window.location.hostname.includes('whatsapp.com')) {
+              const targetChat = step.targetRecipient || (step.target && !step.target.toLowerCase().includes('send') ? step.target : null);
+              if (targetChat) {
+                const cleanContact = targetChat.replace(/^(?:open\s+chat\s+with|chat\s+with|open\s+chat|select\s+chat\s+with|select\s+chat|click\s+on\s+contact|click\s+contact|contact|chat|user)\s+/i, '').trim().toLowerCase();
+                let verified = false;
+                for (let att = 0; att < 5; att++) {
+                  await sleep(250);
+                  const header = document.querySelector('#main header');
+                  const hText = (header ? (header.innerText || header.textContent || '') : '').toLowerCase();
+                  if (hText.includes(cleanContact)) {
+                    verified = true;
+                    break;
+                  }
+                }
+                if (!verified) {
+                  console.warn(`[Content] Opened chat does not verify target "${cleanContact}" in main header.`);
+                }
+              }
+            }
             result.success = true;
             result.page_changed = true;
             break;
@@ -1970,6 +1989,20 @@
               result.success = false;
               result.error = `Target element #${step.tag_id} not found for typing`;
               break;
+            }
+            if (window.location.hostname.includes('whatsapp.com') && step.targetRecipient) {
+              const cleanContact = step.targetRecipient.replace(/^(?:open\s+chat\s+with|chat\s+with|open\s+chat|select\s+chat\s+with|select\s+chat|click\s+on\s+contact|click\s+contact|contact|chat|user)\s+/i, '').trim().toLowerCase();
+              const isSearchField = (step.field || '').toLowerCase().includes('search') || (step.description || '').toLowerCase().includes('search');
+              if (!isSearchField && cleanContact) {
+                const header = document.querySelector('#main header');
+                const hText = (header ? (header.innerText || header.textContent || '') : '').toLowerCase();
+                if (header && !hText.includes(cleanContact)) {
+                  result.success = false;
+                  result.error = `Safety Guard Refusal: Active WhatsApp chat ("${hText.split('\n')[0].trim()}") does not match target contact "${cleanContact}". Refusing to type message!`;
+                  console.error('[Content]', result.error);
+                  break;
+                }
+              }
             }
             try {
               await simulateType(targetNode, step.value || '');
@@ -2013,6 +2046,18 @@
 
             // DEDICATED SOLE TRIGGER FOR WHATSAPP WEB MESSAGE SEND:
             if (window.location.hostname.includes('whatsapp.com') && keyName === 'Enter') {
+              if (step.targetRecipient) {
+                const cleanContact = step.targetRecipient.replace(/^(?:open\s+chat\s+with|chat\s+with|open\s+chat|select\s+chat\s+with|select\s+chat|click\s+on\s+contact|click\s+contact|contact|chat|user)\s+/i, '').trim().toLowerCase();
+                const header = document.querySelector('#main header');
+                const hText = (header ? (header.innerText || header.textContent || '') : '').toLowerCase();
+                if (header && cleanContact && !hText.includes(cleanContact)) {
+                  result.success = false;
+                  result.error = `Safety Guard Refusal: Active WhatsApp chat ("${hText.split('\n')[0].trim()}") does not match target recipient "${cleanContact}". Refusing to send!`;
+                  console.error('[Content]', result.error);
+                  break;
+                }
+              }
+
               const waSendBtn = document.querySelector('span[data-icon="send"], button[aria-label*="send" i], [data-testid="send"], [data-testid="compose-btn-send"], footer button:has(span[data-icon="send"])');
               if (waSendBtn) {
                 // Strict debounce guard: never send more than once in 2.5 seconds

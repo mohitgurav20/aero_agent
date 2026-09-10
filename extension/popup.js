@@ -1258,7 +1258,7 @@ document.addEventListener('DOMContentLoaded', () => {
       isRecording = false;
       micBtn.classList.remove('recording');
       voiceRecordingBar.classList.add('hidden');
-      if (micStatusLabel) micStatusLabel.textContent = 'Tap to speak in English, Hindi, or Kannada';
+      if (micStatusLabel) micStatusLabel.textContent = 'Tap to speak in English';
       if (recordingInterval) clearInterval(recordingInterval);
       if (waveAnimInterval) clearInterval(waveAnimInterval);
 

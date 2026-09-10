@@ -941,22 +941,30 @@ async function decomposeSingleStage(q, currentUrl, context = {}) {
     if (sayingMatch) {
       msgContent = sayingMatch[1].trim();
     } else if (msgMatch) {
-      const desc = msgMatch[1].trim();
-      if (desc.includes('formal') || desc.includes('evening')) {
-        const nameCap = recipient ? recipient.charAt(0).toUpperCase() + recipient.slice(1) : '';
-        msgContent = `Good evening ${nameCap}, I hope you are having a pleasant and productive evening.`;
+      const desc = msgMatch[1].trim().replace(/^(?:for|about)\s+/i, '');
+      const nameCap = recipient ? recipient.charAt(0).toUpperCase() + recipient.slice(1) : '';
+      if (/good morning|morning/i.test(desc)) {
+        msgContent = `Good morning ${nameCap}! Hope you had a restful night and are ready for a wonderful, productive day ahead. Have a great start!`;
+      } else if (/good evening|evening/i.test(desc)) {
+        msgContent = `Good evening ${nameCap}, hope you had a productive day. Have a pleasant evening!`;
+      } else if (/good afternoon|afternoon/i.test(desc)) {
+        msgContent = `Good afternoon ${nameCap}, hope your day is going well!`;
+      } else if (/reminder|sih|presentation/i.test(desc)) {
+        msgContent = `Hey ${nameCap}! Quick reminder about our SIH presentation. Hope you are ready and all set. Good luck!`;
+      } else if (desc.includes('formal')) {
+        msgContent = `Dear ${nameCap}, hope you are well and having a productive day ahead.`;
       } else {
         msgContent = desc.charAt(0).toUpperCase() + desc.slice(1);
       }
     }
 
     if (recipient) {
-      steps.push({ type: 'type', field: 'Search or start a new chat', value: recipient, label: `Search for '${recipient}'` });
-      steps.push({ type: 'click', target: recipient, label: `Open chat with ${recipient}` });
+      steps.push({ type: 'type', field: 'Search or start a new chat', value: recipient, label: `Search for '${recipient}'`, targetRecipient: recipient });
+      steps.push({ type: 'click', target: recipient, label: `Open chat with ${recipient}`, targetRecipient: recipient });
     }
 
-    steps.push({ type: 'type', field: 'Type a message', value: msgContent, label: `Type message for ${recipient || 'contact'}` });
-    steps.push({ type: 'press_key', key: 'Enter', label: 'Send message' });
+    steps.push({ type: 'type', field: 'Type a message', value: msgContent, label: `Type message for ${recipient || 'contact'}`, targetRecipient: recipient });
+    steps.push({ type: 'press_key', key: 'Enter', label: 'Send message', targetRecipient: recipient });
 
     return { steps, context: { ...context, hasNavigated: true, topic: `Message ${recipient} on ${appName}` } };
   }
@@ -1823,9 +1831,13 @@ async function decomposeGoalIntoSteps(query, currentUrl) {
         }
 
         // Auto-inject press_key Enter after any on-page search typing step if missing
+        // (NEVER inject Enter for WhatsApp Web search as WhatsApp filters live and Enter resets/clears search!)
         for (let i = 0; i < normalized.length; i++) {
           const s = normalized[i];
           if (s.type === 'type' && (s.field?.toLowerCase().includes('search') || (s.label || '').toLowerCase().includes('search'))) {
+            const isWhatsAppOrChat = normalized.some(x => x.url?.includes('whatsapp.com') || (x.label || '').toLowerCase().includes('whatsapp')) || query.toLowerCase().includes('whatsapp');
+            if (isWhatsAppOrChat) continue;
+
             const next = normalized[i + 1];
             const hasSubmit = next && (next.type === 'press_key' || (next.type === 'click' && ((next.label || '').toLowerCase().includes('search') || (next.target || '').toLowerCase().includes('search'))));
             if (!hasSubmit) {
@@ -4182,9 +4194,17 @@ async function runStepQueue(tabId) {
       field: step.field || null,
       value: step.value || null,
       key: step.key || null,
+      targetRecipient: step.targetRecipient || activeTask.recipient || (step.target && !step.target.toLowerCase().includes('send') ? step.target : null),
       description: step.label
     }];
   }
+
+  // Ensure targetRecipient is always attached to all actions in plan
+  actions.forEach(a => {
+    if (!a.targetRecipient) {
+      a.targetRecipient = step.targetRecipient || activeTask.recipient || (step.target && !step.target.toLowerCase().includes('send') ? step.target : null);
+    }
+  });
 
   step.status = 'running';
   broadcastStepProgress();
@@ -4201,8 +4221,39 @@ async function runStepQueue(tabId) {
     const execResp = await chrome.tabs.sendMessage(targetTabId, { type: 'execute_actions', payload: plan });
     const hasFailures = execResp?.results?.some(r => r.success === false);
 
+    // Hard Safety Guard check: if content.js blocked action to prevent messaging wrong person, HALT!
+    if (hasFailures) {
+      const guardRefusal = execResp?.results?.find(r => r.error && (r.error.includes('Safety Guard Refusal') || r.error.includes('does not match target')));
+      if (guardRefusal) {
+        console.error(`[SQ] WhatsApp Safety Guard halted task: ${guardRefusal.error}`);
+        activeTask.status = 'failed';
+        activeTask._isExecuting = false;
+        step.status = 'failed';
+        broadcastStepProgress();
+        broadcastStatus('error', guardRefusal.error);
+        return;
+      }
+    }
+
     // If semantic recovery was attempted (tag_id: 0) and failed to find target
     if (hasFailures && actions.some(a => a.tag_id === 0)) {
+      // WhatsApp & chat contact opening check: NEVER advance if contact was not found!
+      const isContactStep = (step.type === 'click') && (
+        (step.label || '').toLowerCase().includes('open chat') ||
+        (step.label || '').toLowerCase().includes('select chat') ||
+        (step.label || '').toLowerCase().includes('chat with') ||
+        (step.label || '').toLowerCase().includes('contact')
+      );
+      if (isContactStep) {
+        console.error(`[SQ] Contact "${step.target || step.label}" could not be opened in WhatsApp/chat. Halting to prevent sending to wrong person!`);
+        activeTask.status = 'failed';
+        activeTask._isExecuting = false;
+        step.status = 'failed';
+        broadcastStepProgress();
+        broadcastStatus('error', `⚠️ Could not find contact "${step.target || 'contact'}" in WhatsApp. Halting execution to prevent messaging the wrong person.`);
+        return;
+      }
+
       // Non-fatal resilience: If this was an email typing step (recipient/subject/body) or search/compose/prep click, advance to next step!
       const isEmailStep = step.type === 'type' && !step.field?.includes('code') && !step.field?.includes('editor') && (step.field?.toLowerCase().includes('subject') || /\bto\b/i.test(step.field || '') || step.field?.toLowerCase().includes('recipient') || step.field?.toLowerCase().includes('body') || step.field?.toLowerCase().includes('message'));
       const isPrepClick = (step.type === 'click' || step.type === 'press_key') && (
@@ -4871,7 +4922,13 @@ function resolveStepToActions(step, elements) {
     // Fast-path Send email / message buttons directly to content.js
     const isSendClick = rawTarget.includes('send');
     if (isSendClick) {
-      return [{ step: 0, tag_id: 0, action: 'click', target: step.target, intent: step.target, description: step.label }];
+      return [{ step: 0, tag_id: 0, action: 'click', target: step.target, intent: step.target, targetRecipient: step.targetRecipient || null, description: step.label }];
+    }
+
+    // Fast-path contact or chat clicks directly to content.js scoped side pane selector
+    const isChatOrContactClick = rawTarget.includes('chat') || rawTarget.includes('contact') || (step.label || '').toLowerCase().includes('open chat') || (step.label || '').toLowerCase().includes('select chat');
+    if (isChatOrContactClick) {
+      return [{ step: 0, tag_id: 0, action: 'click', target: step.target, intent: step.target, targetRecipient: step.targetRecipient || step.target, description: step.label }];
     }
 
     const clickableEls = elements.filter(el => !isInputEl(el) || el.type === 'radio' || el.type === 'button' || el.type === 'submit');
