@@ -601,15 +601,33 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      const resp = await fetch('http://127.0.0.1:5000/api/summarize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: sourceContent,
-          title: sourceTitle,
-          instruction: userGoal || 'Provide an executive summary of this content'
-        })
-      });
+      let resp = null;
+      try {
+        resp = await fetch('http://127.0.0.1:5000/api/summarize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: sourceContent,
+            title: sourceTitle,
+            instruction: userGoal || 'Provide an executive summary of this content'
+          })
+        });
+      } catch (fErr) {
+        console.warn('[Popup] 127.0.0.1:5000 failed, attempting localhost:5000 fallback:', fErr);
+        try {
+          resp = await fetch('http://localhost:5000/api/summarize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: sourceContent,
+              title: sourceTitle,
+              instruction: userGoal || 'Provide an executive summary of this content'
+            })
+          });
+        } catch (fErr2) {
+          throw new Error('Local reasoning server is offline or restarting on port 5000. Please check `py server/run.py`.');
+        }
+      }
 
       if (!resp.ok) {
         throw new Error(`Local server returned status ${resp.status}`);

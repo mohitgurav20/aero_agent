@@ -2813,11 +2813,14 @@ async function runStepQueue(tabId) {
   const currentDomain = getDomainFromUrl(currentTabObj?.url);
   const isExplicitLoginStep = step.label?.toLowerCase().includes('login') || step.label?.toLowerCase().includes('sign in');
 
-  const alreadyVerifiedOnThisDomain = activeTask._userHasSignedIn && activeTask._signedInDomain === currentDomain;
+  if (!activeTask) return;
+  const alreadyVerifiedOnThisDomain = Boolean(activeTask._userHasSignedIn && activeTask._signedInDomain === currentDomain);
   let authInfo = null;
   if (!alreadyVerifiedOnThisDomain && !isExplicitLoginStep) {
     authInfo = await inspectAuthPageFields(targetTabId);
   }
+
+  if (!activeTask) return;
 
   if (authInfo?.isAuth && !isExplicitLoginStep && !alreadyVerifiedOnThisDomain) {
     console.log('[SQ] HITL: Authentication or login wall detected! Pausing for user interaction on:', authInfo.siteName);
@@ -4573,14 +4576,14 @@ async function runStepQueue(tabId) {
         try {
           await chrome.scripting.executeScript({ target: { tabId: targetTabId }, files: ['pii_detector.js', 'content.js'] });
         } catch (injErr) {}
-        activeTask._isExecuting = false;
+        if (activeTask) activeTask._isExecuting = false;
         return runStepQueue(targetTabId);
       }
     }
     step.status = 'failed';
     broadcastStepProgress();
     broadcastStatus('error', `Step failed: ${err.message}`);
-    activeTask._isExecuting = false;
+    if (activeTask) activeTask._isExecuting = false;
   }
 }
 
@@ -4713,8 +4716,9 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
                                currentUrl.includes('/i/flow/login');
 
       const authInfo = await inspectAuthPageFields(tabId);
+      if (!activeTask) return;
       const isAuthDetected = authInfo?.isAuth || isAuthUrlPattern;
-      const alreadyVerified = activeTask._userHasSignedIn && activeTask._signedInDomain === pageDomain;
+      const alreadyVerified = Boolean(activeTask._userHasSignedIn && activeTask._signedInDomain === pageDomain);
 
       if (isAuthDetected && !alreadyVerified) {
         console.log('[SQ] Post-navigation Login Wall / Auth Barrier Detected! Strictly pausing for HITL on:', tab.url);
