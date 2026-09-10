@@ -1034,6 +1034,14 @@
       if (isWhatsApp) {
         targetEditable.focus();
         try {
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(targetEditable);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          document.execCommand('delete', false, null);
+        } catch (e) {}
+        try {
           document.execCommand('selectAll', false, null);
           document.execCommand('delete', false, null);
         } catch (e) {}
@@ -1065,9 +1073,13 @@
 
         // Self-healing: if text got duplicated in the DOM, clean it to a single copy
         if (curVal.length >= cleanText.length * 1.7 && curVal.includes(cleanText)) {
-          console.warn('[Content] Detected duplicate text in WhatsApp editor; resetting to single copy');
+          console.log('[Content] Normalizing text in WhatsApp editor to single copy');
           try {
-            document.execCommand('selectAll', false, null);
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(targetEditable);
+            sel.removeAllRanges();
+            sel.addRange(range);
             document.execCommand('delete', false, null);
             document.execCommand('insertText', false, cleanText);
           } catch (e) {}
@@ -1976,7 +1988,7 @@
                   }
                 }
                 if (!verified) {
-                  console.warn(`[Content] Opened chat does not verify target "${cleanContact}" in main header.`);
+                  console.log(`[Content] Opened chat does not verify target "${cleanContact}" in main header.`);
                 }
               }
             }
@@ -1999,7 +2011,7 @@
                 if (header && !hText.includes(cleanContact)) {
                   result.success = false;
                   result.error = `Safety Guard Refusal: Active WhatsApp chat ("${hText.split('\n')[0].trim()}") does not match target contact "${cleanContact}". Refusing to type message!`;
-                  console.error('[Content]', result.error);
+                  console.log('[Content] ' + result.error);
                   break;
                 }
               }
@@ -2007,7 +2019,7 @@
             try {
               await simulateType(targetNode, step.value || '');
             } catch (typeErr) {
-              console.warn('[Content] Non-fatal simulateType error:', typeErr);
+              console.log('[Content] Non-fatal simulateType note:', typeErr?.message || typeErr);
             }
             result.success = true;
             result.page_changed = true;
@@ -2053,7 +2065,7 @@
                 if (header && cleanContact && !hText.includes(cleanContact)) {
                   result.success = false;
                   result.error = `Safety Guard Refusal: Active WhatsApp chat ("${hText.split('\n')[0].trim()}") does not match target recipient "${cleanContact}". Refusing to send!`;
-                  console.error('[Content]', result.error);
+                  console.log('[Content] ' + result.error);
                   break;
                 }
               }
